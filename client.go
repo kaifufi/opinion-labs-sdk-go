@@ -15,15 +15,15 @@ import (
 
 // Client is the main SDK client
 type Client struct {
-	apiClient              *APIClient
-	contractCaller         *chain.ContractCaller
-	chainID                ChainID
-	quoteTokensCache       interface{}
-	quoteTokensCacheTime   time.Time
-	quoteTokensCacheTTL     time.Duration
-	marketCache            map[int]cacheEntry
-	marketCacheTTL         time.Duration
-	cacheMutex             sync.RWMutex
+	apiClient            *APIClient
+	contractCaller       *chain.ContractCaller
+	chainID              ChainID
+	quoteTokensCache     interface{}
+	quoteTokensCacheTime time.Time
+	quoteTokensCacheTTL  time.Duration
+	marketCache          map[int]cacheEntry
+	marketCacheTTL       time.Duration
+	cacheMutex           sync.RWMutex
 }
 
 type cacheEntry struct {
@@ -33,18 +33,18 @@ type cacheEntry struct {
 
 // ClientConfig holds configuration for creating a Client
 type ClientConfig struct {
-	Host                      string
-	APIKey                    string
-	ChainID                   ChainID
-	RPCURL                    string
-	PrivateKey                string
-	MultiSigAddr              string
-	ConditionalTokensAddr     string
-	MultisendAddr             string
-	FeeManagerAddr            string
+	Host                       string
+	APIKey                     string
+	ChainID                    ChainID
+	RPCURL                     string
+	PrivateKey                 string
+	MultiSigAddr               string
+	ConditionalTokensAddr      string
+	MultisendAddr              string
+	FeeManagerAddr             string
 	EnableTradingCheckInterval time.Duration
-	QuoteTokensCacheTTL       time.Duration
-	MarketCacheTTL            time.Duration
+	QuoteTokensCacheTTL        time.Duration
+	MarketCacheTTL             time.Duration
 }
 
 // NewClient creates a new Opinion CLOB SDK client
@@ -104,12 +104,12 @@ func NewClient(config ClientConfig) (*Client, error) {
 	}
 
 	return &Client{
-		apiClient:              apiClient,
-		contractCaller:         contractCaller,
-		chainID:                config.ChainID,
-		quoteTokensCacheTTL:     config.QuoteTokensCacheTTL,
-		marketCacheTTL:         config.MarketCacheTTL,
-		marketCache:            make(map[int]cacheEntry),
+		apiClient:           apiClient,
+		contractCaller:      contractCaller,
+		chainID:             config.ChainID,
+		quoteTokensCacheTTL: config.QuoteTokensCacheTTL,
+		marketCacheTTL:      config.MarketCacheTTL,
+		marketCache:         make(map[int]cacheEntry),
 	}, nil
 }
 
@@ -127,12 +127,20 @@ func (c *Client) EnableTrading(ctx context.Context) (*TransactionResult, error) 
 		return nil, err
 	}
 
-	// TODO: Parse quote token response to extract quote_token_address -> ctf_exchange_address mapping
-	// Parse quote tokens (simplified - in production, parse the actual response structure)
+	// Parse quote token response to extract quote_token_address -> ctf_exchange_address mapping
 	supportedQuoteTokens := make(map[string]string)
-	// This would parse the actual response in production
-	_ = quoteTokenListResponse
-	_ = supportedQuoteTokens
+
+	for _, quoteToken := range quoteTokenListResponse.Result.List {
+		quoteTokenAddress := common.HexToAddress(quoteToken.QuoteTokenAddress).Hex()
+		ctfExchangeAddress := common.HexToAddress(quoteToken.CTFExchangeAddress).Hex()
+		supportedQuoteTokens[quoteTokenAddress] = ctfExchangeAddress
+	}
+
+	fmt.Printf("Supported quote tokens: %v\n", supportedQuoteTokens)
+
+	if len(supportedQuoteTokens) == 0 {
+		return nil, &OpenAPIError{Message: "No supported quote tokens found"}
+	}
 
 	tx, err := c.contractCaller.EnableTrading(ctx, supportedQuoteTokens)
 	if err != nil {
@@ -273,14 +281,16 @@ func (c *Client) Redeem(ctx context.Context, marketID int, checkApproval bool) (
 }
 
 // GetQuoteTokens fetches the list of supported quote tokens
-func (c *Client) GetQuoteTokens(useCache bool) (interface{}, error) {
+func (c *Client) GetQuoteTokens(useCache bool) (*GetQuoteTokensResponse, error) {
 	c.cacheMutex.RLock()
 	if useCache && c.quoteTokensCacheTTL > 0 {
 		if c.quoteTokensCache != nil {
 			cacheAge := time.Since(c.quoteTokensCacheTime)
 			if cacheAge < c.quoteTokensCacheTTL {
 				c.cacheMutex.RUnlock()
-				return c.quoteTokensCache, nil
+				if cached, ok := c.quoteTokensCache.(*GetQuoteTokensResponse); ok {
+					return cached, nil
+				}
 			}
 		}
 	}
@@ -302,7 +312,7 @@ func (c *Client) GetQuoteTokens(useCache bool) (interface{}, error) {
 }
 
 // GetMarkets fetches markets with pagination and filters
-func (c *Client) GetMarkets(topicType TopicType, page, limit int, status *TopicStatusFilter, sortBy *TopicSortType) (interface{}, error) {
+func (c *Client) GetMarkets(topicType TopicType, page, limit int, status *TopicStatusFilter, sortBy *TopicSortType) (*GetMarketsResponse, error) {
 	if page < 1 {
 		return nil, &InvalidParamError{Message: "page must be >= 1"}
 	}
@@ -314,7 +324,7 @@ func (c *Client) GetMarkets(topicType TopicType, page, limit int, status *TopicS
 }
 
 // GetMarket fetches detailed information about a specific market
-func (c *Client) GetMarket(marketID int, useCache bool) (interface{}, error) {
+func (c *Client) GetMarket(marketID int, useCache bool) (*Market, error) {
 	if marketID <= 0 {
 		return nil, &InvalidParamError{Message: "market_id is required"}
 	}
@@ -325,7 +335,9 @@ func (c *Client) GetMarket(marketID int, useCache bool) (interface{}, error) {
 			cacheAge := time.Since(entry.timestamp)
 			if cacheAge < c.marketCacheTTL {
 				c.cacheMutex.RUnlock()
-				return entry.data, nil
+				if market, ok := entry.data.(*Market); ok {
+					return market, nil
+				}
 			}
 		}
 	}
@@ -336,16 +348,18 @@ func (c *Client) GetMarket(marketID int, useCache bool) (interface{}, error) {
 		return nil, err
 	}
 
+	market := &result.Result.Data
+
 	c.cacheMutex.Lock()
 	if c.marketCacheTTL > 0 {
 		c.marketCache[marketID] = cacheEntry{
-			data:      result,
+			data:      market,
 			timestamp: time.Now(),
 		}
 	}
 	c.cacheMutex.Unlock()
 
-	return result, nil
+	return market, nil
 }
 
 // GetCategoricalMarket fetches detailed information about a categorical market
@@ -499,28 +513,28 @@ func (c *Client) PlaceOrder(ctx context.Context, data PlaceOrderDataInput, check
 
 	// Create order request
 	orderReq := map[string]interface{}{
-		"salt":            signedOrder.Order.Salt,
-		"topic_id":        data.MarketID,
-		"maker":           signedOrder.Order.Maker,
-		"signer":          signedOrder.Order.Signer,
-		"taker":           signedOrder.Order.Taker,
-		"token_id":        signedOrder.Order.TokenID,
-		"maker_amount":    signedOrder.Order.MakerAmount,
-		"taker_amount":    signedOrder.Order.TakerAmount,
-		"expiration":      signedOrder.Order.Expiration,
-		"nonce":           signedOrder.Order.Nonce,
-		"fee_rate_bps":    signedOrder.Order.FeeRateBps,
-		"side":            signedOrder.Order.Side,
-		"signature_type":  signedOrder.Order.SignatureType,
-		"signature":       signedOrder.Signature,
-		"sign":            signedOrder.Signature,
+		"salt":             signedOrder.Order.Salt,
+		"topic_id":         data.MarketID,
+		"maker":            signedOrder.Order.Maker,
+		"signer":           signedOrder.Order.Signer,
+		"taker":            signedOrder.Order.Taker,
+		"token_id":         signedOrder.Order.TokenID,
+		"maker_amount":     signedOrder.Order.MakerAmount,
+		"taker_amount":     signedOrder.Order.TakerAmount,
+		"expiration":       signedOrder.Order.Expiration,
+		"nonce":            signedOrder.Order.Nonce,
+		"fee_rate_bps":     signedOrder.Order.FeeRateBps,
+		"side":             signedOrder.Order.Side,
+		"signature_type":   signedOrder.Order.SignatureType,
+		"signature":        signedOrder.Signature,
+		"sign":             signedOrder.Signature,
 		"contract_address": "",
 		"currency_address": "", // TODO: Extract from parsed market data
-		"price":           data.Price,
-		"trading_method":  int(data.OrderType),
-		"timestamp":       time.Now().Unix(),
-		"safe_rate":       "0",
-		"order_exp_time":  "0",
+		"price":            data.Price,
+		"trading_method":   int(data.OrderType),
+		"timestamp":        time.Now().Unix(),
+		"safe_rate":        "0",
+		"order_exp_time":   "0",
 	}
 
 	return c.apiClient.PlaceOrder(orderReq)
@@ -585,4 +599,3 @@ func (c *Client) GetMyTrades(marketID *int, page, limit int) (interface{}, error
 func (c *Client) GetUserAuth() (interface{}, error) {
 	return c.apiClient.GetUserAuth()
 }
-

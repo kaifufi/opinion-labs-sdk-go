@@ -79,27 +79,27 @@ type TransactionResult struct {
 
 // PlaceOrderDataInput represents input data for placing an order
 type PlaceOrderDataInput struct {
-	MarketID              int
-	TokenID               string
+	MarketID                int
+	TokenID                 string
 	MakerAmountInQuoteToken *string // Optional: amount in quote token (e.g., USDC)
 	MakerAmountInBaseToken  *string // Optional: amount in base token (e.g., YES token)
-	Price                 string
-	Side                  OrderSide
-	OrderType             OrderType
+	Price                   string
+	Side                    OrderSide
+	OrderType               OrderType
 }
 
 // OrderData represents the data for building an order
 type OrderData struct {
-	Maker        string
-	Taker        string
-	TokenID      string
-	MakerAmount  string
-	TakerAmount  string
-	Side         OrderSide
-	FeeRateBps   string
-	Nonce        string
-	Signer       string
-	Expiration   string
+	Maker         string
+	Taker         string
+	TokenID       string
+	MakerAmount   string
+	TakerAmount   string
+	Side          OrderSide
+	FeeRateBps    string
+	Nonce         string
+	Signer        string
+	Expiration    string
 	SignatureType SignatureType
 }
 
@@ -111,17 +111,17 @@ type SignedOrder struct {
 
 // Order represents an EIP712 order structure
 type Order struct {
-	Salt         string
-	Maker        string
-	Signer       string
-	Taker        string
-	TokenID      string
-	MakerAmount  string
-	TakerAmount  string
-	Expiration   string
-	Nonce        string
-	FeeRateBps   string
-	Side         string
+	Salt          string
+	Maker         string
+	Signer        string
+	Taker         string
+	TokenID       string
+	MakerAmount   string
+	TakerAmount   string
+	Expiration    string
+	Nonce         string
+	FeeRateBps    string
+	Side          string
 	SignatureType string
 }
 
@@ -132,3 +132,92 @@ type FeeRateSettings struct {
 	Enabled         bool
 }
 
+// ChildMarket represents a child market within a categorical market
+type ChildMarket struct {
+	MarketID      int    `json:"marketId"`
+	MarketTitle   string `json:"marketTitle"`
+	Status        int    `json:"status"`
+	StatusEnum    string `json:"statusEnum"`
+	YesLabel      string `json:"yesLabel"`
+	NoLabel       string `json:"noLabel"`
+	Rules         string `json:"rules"`
+	YesTokenID    string `json:"yesTokenId"`
+	NoTokenID     string `json:"noTokenId"`
+	ConditionID   string `json:"conditionId"`
+	ResultTokenID string `json:"resultTokenId"`
+	Volume        string `json:"volume"`
+	QuoteToken    string `json:"quoteToken"`
+	ChainID       string `json:"chainId"`
+	QuestionID    string `json:"questionId"`
+	CreatedAt     int64  `json:"createdAt"`
+	CutoffAt      int64  `json:"cutoffAt"`
+	ResolvedAt    int64  `json:"resolvedAt"`
+}
+
+// Market represents detailed market information
+type Market struct {
+	MarketID        int                    `json:"marketId"`
+	MarketTitle     string                 `json:"marketTitle"`
+	Status          int                    `json:"status"`
+	StatusEnum      string                 `json:"statusEnum"`
+	MarketType      int                    `json:"marketType"`
+	ChildMarkets    []ChildMarket          `json:"childMarkets"`
+	YesLabel        string                 `json:"yesLabel"`
+	NoLabel         string                 `json:"noLabel"`
+	Rules           string                 `json:"rules"`
+	YesTokenID      string                 `json:"yesTokenId"`
+	NoTokenID       string                 `json:"noTokenId"`
+	ConditionID     string                 `json:"conditionId"`
+	ResultTokenID   string                 `json:"resultTokenId"`
+	Volume          string                 `json:"volume"`
+	Volume24H       string                 `json:"volume24h"`
+	Volume7D        string                 `json:"volume7d"`
+	QuoteToken      string                 `json:"quoteToken"`
+	ChainID         string                 `json:"chainId"`
+	QuestionID      string                 `json:"questionId"`
+	IncentiveFactor map[string]interface{} `json:"incentiveFactor"`
+	CreatedAt       int64                  `json:"createdAt"`
+	CutoffAt        int64                  `json:"cutoffAt"`
+	ResolvedAt      int64                  `json:"resolvedAt"`
+}
+
+// GetMarketResponse represents the API response for GetMarket
+type GetMarketResponse struct {
+	Code   int    `json:"code"`
+	Msg    string `json:"msg"`
+	Result struct {
+		Data Market `json:"data"`
+	} `json:"result"`
+}
+
+// GetMarketsResponse represents the API response for GetMarkets
+type GetMarketsResponse struct {
+	Code   int    `json:"code"`
+	Msg    string `json:"msg"`
+	Result struct {
+		Total int      `json:"total"`
+		List  []Market `json:"list"`
+	} `json:"result"`
+}
+
+// QuoteToken represents a supported quote token
+type QuoteToken struct {
+	ID                 int    `json:"id"`
+	QuoteTokenName     string `json:"quoteTokenName"`
+	QuoteTokenAddress  string `json:"quoteTokenAddress"`
+	CTFExchangeAddress string `json:"ctfExchangeAddress"`
+	Decimal            int    `json:"decimal"`
+	Symbol             string `json:"symbol"`
+	ChainID            string `json:"chainId"`
+	CreatedAt          int64  `json:"createdAt"`
+}
+
+// GetQuoteTokensResponse represents the API response for GetQuoteTokens
+type GetQuoteTokensResponse struct {
+	Code   int    `json:"code"`
+	Msg    string `json:"msg"`
+	Result struct {
+		Total int          `json:"total"`
+		List  []QuoteToken `json:"list"`
+	} `json:"result"`
+}
