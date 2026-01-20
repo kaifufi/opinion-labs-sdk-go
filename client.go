@@ -740,3 +740,199 @@ func (c *Client) GetMyTrades(marketID *int, page, limit int) (interface{}, error
 func (c *Client) GetUserAuth() (interface{}, error) {
 	return c.apiClient.GetUserAuth()
 }
+
+// PlaceOrdersBatch places multiple orders in batch to reduce API calls.
+// If checkApproval is true, trading is enabled once for all orders.
+func (c *Client) PlaceOrdersBatch(ctx context.Context, orders []PlaceOrderDataInput, checkApproval bool) ([]BatchOrderResult, error) {
+	if len(orders) == 0 {
+		return nil, &InvalidParamError{Message: "orders list cannot be empty"}
+	}
+
+	// Enable trading once for all orders if needed
+	if checkApproval {
+		if _, err := c.EnableTrading(ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	results := make([]BatchOrderResult, 0, len(orders))
+
+	for i, order := range orders {
+		orderCopy := order                             // Create a copy for the pointer
+		result, err := c.PlaceOrder(ctx, order, false) // Don't check approval again
+		if err != nil {
+			results = append(results, BatchOrderResult{
+				Index:   i,
+				Success: false,
+				Error:   err.Error(),
+				Order:   &orderCopy,
+			})
+		} else {
+			results = append(results, BatchOrderResult{
+				Index:   i,
+				Success: true,
+				Result:  result,
+				Order:   &orderCopy,
+			})
+		}
+	}
+
+	return results, nil
+}
+
+// CancelOrdersBatch cancels multiple orders in batch.
+func (c *Client) CancelOrdersBatch(orderIDs []string) ([]BatchCancelResult, error) {
+	if len(orderIDs) == 0 {
+		return nil, &InvalidParamError{Message: "orderIDs list cannot be empty"}
+	}
+
+	results := make([]BatchCancelResult, 0, len(orderIDs))
+
+	for i, orderID := range orderIDs {
+		result, err := c.CancelOrder(orderID)
+		if err != nil {
+			results = append(results, BatchCancelResult{
+				Index:   i,
+				Success: false,
+				Error:   err.Error(),
+				OrderID: orderID,
+			})
+		} else {
+			results = append(results, BatchCancelResult{
+				Index:   i,
+				Success: true,
+				Result:  result,
+				OrderID: orderID,
+			})
+		}
+	}
+
+	return results, nil
+}
+
+// CancelAllOrders cancels all open orders, optionally filtered by market and/or side.
+// Uses pagination to fetch all orders (max 20 per page).
+func (c *Client) CancelAllOrders(marketID *int, side *OrderSide) (*CancelAllOrdersResult, error) {
+	const (
+		maxPageLimit = 20
+		maxPages     = 100 // Safety limit to prevent infinite loops
+		openStatus   = "1" // 1 = pending/open orders
+	)
+
+	// Collect all open orders using pagination
+	var allOrderIDs []string
+	page := 1
+
+	for page <= maxPages {
+		// Get orders for current page
+		market := 0
+		if marketID != nil {
+			market = *marketID
+		}
+		pageOrders, err := c.GetMyOrders(market, openStatus, maxPageLimit, page)
+		if err != nil {
+			return nil, &OpenAPIError{Message: fmt.Sprintf("failed to get open orders page %d: %v", page, err)}
+		}
+
+		// Parse response to extract order list
+		orders, ok := parseOrdersList(pageOrders)
+		if !ok || len(orders) == 0 {
+			// No more orders on this page
+			break
+		}
+
+		// Filter by side if specified and extract order IDs
+		for _, order := range orders {
+			if side != nil {
+				orderSide, sideOk := order["side"]
+				if sideOk {
+					// Handle both int and float64 JSON parsing
+					var orderSideInt int
+					switch v := orderSide.(type) {
+					case float64:
+						orderSideInt = int(v)
+					case int:
+						orderSideInt = v
+					default:
+						continue // Skip if side is not a valid type
+					}
+					if orderSideInt != int(*side) {
+						continue // Skip orders that don't match the filter
+					}
+				}
+			}
+
+			if orderID, ok := order["order_id"].(string); ok && orderID != "" {
+				allOrderIDs = append(allOrderIDs, orderID)
+			}
+		}
+
+		// If we got fewer orders than the limit, we've reached the last page
+		if len(orders) < maxPageLimit {
+			break
+		}
+
+		page++
+	}
+
+	if len(allOrderIDs) == 0 {
+		return &CancelAllOrdersResult{
+			TotalOrders: 0,
+			Cancelled:   0,
+			Failed:      0,
+			Results:     []BatchCancelResult{},
+		}, nil
+	}
+
+	// Cancel all orders in batch
+	results, err := c.CancelOrdersBatch(allOrderIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Count successes and failures
+	cancelled := 0
+	failed := 0
+	for _, r := range results {
+		if r.Success {
+			cancelled++
+		} else {
+			failed++
+		}
+	}
+
+	return &CancelAllOrdersResult{
+		TotalOrders: len(allOrderIDs),
+		Cancelled:   cancelled,
+		Failed:      failed,
+		Results:     results,
+	}, nil
+}
+
+// parseOrdersList attempts to parse the orders list from a GetMyOrders response
+func parseOrdersList(response interface{}) ([]map[string]interface{}, bool) {
+	// Try to parse as a map with result.list structure
+	respMap, ok := response.(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+
+	result, ok := respMap["result"].(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+
+	list, ok := result["list"].([]interface{})
+	if !ok {
+		return nil, false
+	}
+
+	orders := make([]map[string]interface{}, 0, len(list))
+	for _, item := range list {
+		if order, ok := item.(map[string]interface{}); ok {
+			orders = append(orders, order)
+		}
+	}
+
+	return orders, true
+}

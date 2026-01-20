@@ -221,3 +221,29 @@ type GetQuoteTokensResponse struct {
 		List  []QuoteToken `json:"list"`
 	} `json:"result"`
 }
+
+// BatchOrderResult represents the result of a single order in a batch operation
+type BatchOrderResult struct {
+	Index   int                  `json:"index"`
+	Success bool                 `json:"success"`
+	Result  interface{}          `json:"result,omitempty"`
+	Error   string               `json:"error,omitempty"`
+	Order   *PlaceOrderDataInput `json:"order,omitempty"`
+}
+
+// BatchCancelResult represents the result of a single cancel in a batch operation
+type BatchCancelResult struct {
+	Index   int         `json:"index"`
+	Success bool        `json:"success"`
+	Result  interface{} `json:"result,omitempty"`
+	Error   string      `json:"error,omitempty"`
+	OrderID string      `json:"orderId,omitempty"`
+}
+
+// CancelAllOrdersResult represents the summary of cancelling all orders
+type CancelAllOrdersResult struct {
+	TotalOrders int                 `json:"totalOrders"`
+	Cancelled   int                 `json:"cancelled"`
+	Failed      int                 `json:"failed"`
+	Results     []BatchCancelResult `json:"results"`
+}

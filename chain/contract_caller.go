@@ -294,12 +294,78 @@ func (cc *ContractCaller) Redeem(ctx context.Context, collateralToken common.Add
 		return nil, err
 	}
 
-	// TODO: Implement redeemPositions using ConditionalTokens contract ABI
-	// Placeholder implementation
-	_ = collateralToken
-	_ = conditionID
+	conditionalTokensABI := GetConditionalTokensABI()
 
-	return nil, fmt.Errorf("redeem not fully implemented - requires ConditionalTokens ABI")
+	// Convert conditionID to [32]byte
+	var conditionIDBytes32 [32]byte
+	copy(conditionIDBytes32[:], conditionID)
+
+	// parentCollectionId is NULL_HASH (all zeros)
+	var parentCollectionID [32]byte
+
+	// partition = [1, 2] for binary markets (YES and NO outcomes)
+	partition := []*big.Int{big.NewInt(1), big.NewInt(2)}
+
+	// Check if user has any positions to redeem
+	hasPositions := false
+	for _, indexSet := range partition {
+		positionID, err := cc.getPositionID(ctx, conditionIDBytes32, indexSet, collateralToken, parentCollectionID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get position ID: %w", err)
+		}
+
+		balance, err := cc.getConditionalTokenBalance(ctx, cc.multiSigAddr, positionID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get position balance: %w", err)
+		}
+
+		if balance.Sign() > 0 {
+			hasPositions = true
+			break
+		}
+	}
+
+	if !hasPositions {
+		return nil, fmt.Errorf("no positions to redeem")
+	}
+
+	// Build redeemPositions call data
+	redeemData, err := conditionalTokensABI.Pack("redeemPositions",
+		collateralToken,
+		parentCollectionID,
+		conditionIDBytes32,
+		partition,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to pack redeemPositions: %w", err)
+	}
+
+	// Build multisend transaction
+	multiSendTxs := []MultiSendTx{
+		{
+			Operation: MultiSendOperationCall,
+			To:        cc.conditionalTokensAddr,
+			Value:     big.NewInt(0),
+			Data:      redeemData,
+		},
+	}
+
+	// Execute via multisend
+	tx, err := cc.executeMultisend(ctx, multiSendTxs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute redeemPositions: %w", err)
+	}
+
+	// Wait for transaction receipt and validate
+	receipt, err := cc.waitForReceipt(ctx, tx.Hash())
+	if err != nil {
+		return nil, fmt.Errorf("failed to wait for redeem transaction: %w", err)
+	}
+	if receipt.Status != 1 {
+		return nil, fmt.Errorf("redeem transaction failed: tx hash %s", tx.Hash().Hex())
+	}
+
+	return tx, nil
 }
 
 // EnableTrading enables trading by approving necessary tokens.
@@ -690,11 +756,59 @@ func (cc *ContractCaller) executeMultisend(ctx context.Context, txs []MultiSendT
 
 // GetFeeRateSettings gets fee rate settings from FeeManager contract
 func (cc *ContractCaller) GetFeeRateSettings(ctx context.Context, tokenID *big.Int) (*FeeRateSettings, error) {
-	// TODO: Implement getFeeRateSettings call using FeeManager contract ABI
-	// In production, this would call feeManager.getFeeRateSettings(tokenID)
-	_ = tokenID
+	feeManagerABI := GetFeeManagerABI()
 
-	return nil, fmt.Errorf("get_fee_rate_settings not fully implemented - requires FeeManager ABI")
+	data, err := feeManagerABI.Pack("getFeeRateSettings", tokenID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to pack getFeeRateSettings: %w", err)
+	}
+
+	result, err := cc.client.CallContract(ctx, ethereum.CallMsg{
+		To:   &cc.feeManagerAddr,
+		Data: data,
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call getFeeRateSettings: %w", err)
+	}
+
+	// Unpack the result - returns (makerFeeRateBps, takerFeeRateBps, enabled, minFeeAmount)
+	var (
+		makerFeeRateBps *big.Int
+		takerFeeRateBps *big.Int
+		enabled         bool
+		minFeeAmount    *big.Int
+	)
+
+	// Create a struct to unpack into
+	type feeRateResult struct {
+		MakerFeeRateBps *big.Int
+		TakerFeeRateBps *big.Int
+		Enabled         bool
+		MinFeeAmount    *big.Int
+	}
+
+	var unpacked feeRateResult
+	err = feeManagerABI.UnpackIntoInterface(&unpacked, "getFeeRateSettings", result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unpack getFeeRateSettings: %w", err)
+	}
+
+	makerFeeRateBps = unpacked.MakerFeeRateBps
+	takerFeeRateBps = unpacked.TakerFeeRateBps
+	enabled = unpacked.Enabled
+	_ = minFeeAmount // Not used in the current FeeRateSettings struct
+
+	// Convert basis points to max fee rate percentage
+	// Formula: fee_rate_bps * 0.25 / 10000
+	// Example: 800 * 0.25 / 10000 = 0.02 (2%)
+	makerMaxFeeRate := float64(makerFeeRateBps.Int64()) * 0.25 / 10000
+	takerMaxFeeRate := float64(takerFeeRateBps.Int64()) * 0.25 / 10000
+
+	return &FeeRateSettings{
+		MakerMaxFeeRate: makerMaxFeeRate,
+		TakerMaxFeeRate: takerMaxFeeRate,
+		Enabled:         enabled,
+	}, nil
 }
 
 // Close closes the Ethereum client connection

@@ -174,6 +174,27 @@ const conditionalTokensABIJSON = `[
 		"name": "balanceOf",
 		"outputs": [{"name": "", "type": "uint256"}],
 		"type": "function"
+	},
+	{
+		"constant": true,
+		"inputs": [
+			{"name": "parentCollectionId", "type": "bytes32"},
+			{"name": "conditionId", "type": "bytes32"},
+			{"name": "indexSet", "type": "uint256"}
+		],
+		"name": "getCollectionId",
+		"outputs": [{"name": "", "type": "bytes32"}],
+		"type": "function"
+	},
+	{
+		"constant": true,
+		"inputs": [
+			{"name": "collateralToken", "type": "address"},
+			{"name": "collectionId", "type": "bytes32"}
+		],
+		"name": "getPositionId",
+		"outputs": [{"name": "", "type": "uint256"}],
+		"type": "function"
 	}
 ]`
 
@@ -186,6 +207,24 @@ const multisendABIJSON = `[
 		],
 		"name": "multiSend",
 		"outputs": [],
+		"type": "function"
+	}
+]`
+
+// FeeManager ABI JSON for getFeeRateSettings function
+const feeManagerABIJSON = `[
+	{
+		"constant": true,
+		"inputs": [
+			{"name": "tokenId", "type": "uint256"}
+		],
+		"name": "getFeeRateSettings",
+		"outputs": [
+			{"name": "makerFeeRateBps", "type": "uint256"},
+			{"name": "takerFeeRateBps", "type": "uint256"},
+			{"name": "enabled", "type": "bool"},
+			{"name": "minFeeAmount", "type": "uint256"}
+		],
 		"type": "function"
 	}
 ]`
@@ -213,6 +252,15 @@ func GetMultisendABI() abi.ABI {
 	parsed, err := abi.JSON(strings.NewReader(multisendABIJSON))
 	if err != nil {
 		panic("failed to parse Multisend ABI: " + err.Error())
+	}
+	return parsed
+}
+
+// GetFeeManagerABI returns the parsed FeeManager ABI
+func GetFeeManagerABI() abi.ABI {
+	parsed, err := abi.JSON(strings.NewReader(feeManagerABIJSON))
+	if err != nil {
+		panic("failed to parse FeeManager ABI: " + err.Error())
 	}
 	return parsed
 }

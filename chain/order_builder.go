@@ -96,34 +96,29 @@ func (ob *OrderBuilder) BuildSignedOrder(data *OrderData) (*SignedOrder, error) 
 	}, nil
 }
 
-// SignOrder signs an order using EIP712
+// SignOrder signs an order using EIP712 typed data signing
+// This follows the EIP712 specification matching the Python SDK implementation
 func (ob *OrderBuilder) SignOrder(order *Order) (string, error) {
-	// TODO: Implement full EIP712 signing according to the order structure
-	
-	// Build the message hash (simplified)
-	// TODO: Use proper EIP712 domain separator and typed data encoding
-	message := fmt.Sprintf("%s%s%s%s%s%s%s%s%s%s%s%s",
-		order.Salt,
-		order.Maker,
-		order.Signer,
-		order.Taker,
-		order.TokenID,
-		order.MakerAmount,
-		order.TakerAmount,
-		order.Expiration,
-		order.Nonce,
-		order.FeeRateBps,
-		order.Side,
-		order.SignatureType,
-	)
+	// Convert the Order to typed data for EIP712 hashing
+	typedData, err := OrderToTypedData(order)
+	if err != nil {
+		return "", fmt.Errorf("failed to convert order to typed data: %w", err)
+	}
 
-	hash := crypto.Keccak256Hash([]byte(message))
-	signature, err := crypto.Sign(hash.Bytes(), ob.signer)
+	// Create the EIP712 domain
+	domain := NewEIP712Domain(ob.chainID, ob.exchangeAddr)
+
+	// Create the EIP712 sign hash: keccak256("\x19\x01" ++ domainSeparator ++ structHash)
+	signHash := CreateOrderSignHash(domain, typedData)
+
+	// Sign the hash with ECDSA
+	signature, err := crypto.Sign(signHash.Bytes(), ob.signer)
 	if err != nil {
 		return "", fmt.Errorf("failed to sign order: %w", err)
 	}
 
-	// Add recovery ID
+	// Adjust recovery ID (v) to be 27 or 28 for Ethereum compatibility
+	// go-ethereum's crypto.Sign returns v as 0 or 1, but Ethereum expects 27 or 28
 	signature[64] += 27
 
 	return fmt.Sprintf("0x%x", signature), nil
@@ -157,4 +152,3 @@ func (ob *OrderBuilder) generateSalt() string {
 func normalizeAddress(addr string) string {
 	return common.HexToAddress(addr).Hex()
 }
-
