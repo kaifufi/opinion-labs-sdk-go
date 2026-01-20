@@ -2,6 +2,7 @@ package opinionclob
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -178,24 +179,36 @@ func (c *Client) Split(ctx context.Context, marketID int, amount *big.Int, check
 		}
 	}
 
-	marketResponse, err := c.GetMarket(marketID, true)
+	market, err := c.GetMarket(marketID, true)
 	if err != nil {
-		return nil, err
+		return nil, &OpenAPIError{Message: fmt.Sprintf("get market for split: %v", err)}
 	}
 
-	// TODO: Parse market response to extract condition_id, collateral, and chain_id
-	// Parse market data (simplified)
-	// In production, you'd parse the actual response structure
-	_ = marketResponse
+	// Validate chain_id matches
+	marketChainID, err := strconv.Atoi(market.ChainID)
+	if err != nil {
+		return nil, &OpenAPIError{Message: fmt.Sprintf("invalid market chain_id: %s", market.ChainID)}
+	}
+	if ChainID(marketChainID) != c.chainID {
+		return nil, &OpenAPIError{Message: "Cannot split on different chain"}
+	}
 
-	// Extract condition_id and collateral from market data
-	// This is a placeholder - actual implementation would parse the response
-	collateral := common.HexToAddress("0x0") // TODO: Extract from market data
-	conditionID := []byte{}                  // TODO: Extract from market data
+	// Validate market status (must be ACTIVATED, RESOLVED, or RESOLVING)
+	status := TopicStatus(market.Status)
+	if status != TopicStatusActivated && status != TopicStatusResolved && status != TopicStatusResolving {
+		return nil, &OpenAPIError{Message: "Cannot split on non-activated/resolving/resolved market"}
+	}
+
+	// Extract collateral (quote_token) and condition_id from market data
+	collateral := common.HexToAddress(market.QuoteToken)
+	conditionID, err := hex.DecodeString(market.ConditionID)
+	if err != nil {
+		return nil, &OpenAPIError{Message: fmt.Sprintf("invalid condition_id: %s", market.ConditionID)}
+	}
 
 	tx, err := c.contractCaller.Split(ctx, collateral, conditionID, amount)
 	if err != nil {
-		return nil, err
+		return nil, &OpenAPIError{Message: fmt.Sprintf("Failed to split collateral: %v", err)}
 	}
 
 	return &TransactionResult{

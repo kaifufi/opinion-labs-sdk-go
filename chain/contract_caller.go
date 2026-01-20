@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -124,28 +123,65 @@ func (cc *ContractCaller) Split(ctx context.Context, collateralToken common.Addr
 		return nil, err
 	}
 
-	// TODO: Check balance using ERC20 contract ABI
-	// In production, you'd call the ERC20 contract to check balance
-	// For now, this is a placeholder
-
-	// TODO: Implement splitPosition using ConditionalTokens contract ABI
-	// Build transaction data for splitPosition
-	// This would use the ConditionalTokens ABI in production
-	// For now, returning a placeholder transaction
-
-	auth, err := bind.NewKeyedTransactorWithChainID(cc.privateKey, big.NewInt(56))
+	// Check balance of collateral token
+	balance, err := cc.getERC20Balance(ctx, collateralToken, cc.multiSigAddr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get collateral balance: %w", err)
+	}
+	if balance.Cmp(amount) < 0 {
+		return nil, fmt.Errorf("insufficient collateral balance: has %s, needs %s", balance.String(), amount.String())
 	}
 
-	// Placeholder - actual implementation would call conditionalTokens.splitPosition
-	// This requires the ConditionalTokens contract ABI
-	_ = collateralToken
-	_ = conditionID
-	_ = amount
-	_ = auth
+	// Build splitPosition call data
+	conditionalTokensABI := GetConditionalTokensABI()
 
-	return nil, fmt.Errorf("split not fully implemented - requires ConditionalTokens ABI")
+	// Convert conditionID to [32]byte
+	var conditionIDBytes32 [32]byte
+	copy(conditionIDBytes32[:], conditionID)
+
+	// parentCollectionId is NULL_HASH (all zeros)
+	var parentCollectionID [32]byte
+
+	// partition = [1, 2] for binary markets (YES and NO outcomes)
+	partition := []*big.Int{big.NewInt(1), big.NewInt(2)}
+
+	splitData, err := conditionalTokensABI.Pack("splitPosition",
+		collateralToken,
+		parentCollectionID,
+		conditionIDBytes32,
+		partition,
+		amount,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to pack splitPosition: %w", err)
+	}
+
+	// Build multisend transaction
+	multiSendTxs := []MultiSendTx{
+		{
+			Operation: MultiSendOperationCall,
+			To:        cc.conditionalTokensAddr,
+			Value:     big.NewInt(0),
+			Data:      splitData,
+		},
+	}
+
+	// Execute via multisend
+	tx, err := cc.executeMultisend(ctx, multiSendTxs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute splitPosition: %w", err)
+	}
+
+	// Wait for transaction receipt and validate
+	receipt, err := cc.waitForReceipt(ctx, tx.Hash())
+	if err != nil {
+		return nil, fmt.Errorf("failed to wait for split transaction: %w", err)
+	}
+	if receipt.Status != 1 {
+		return nil, fmt.Errorf("split transaction failed: tx hash %s", tx.Hash().Hex())
+	}
+
+	return tx, nil
 }
 
 // Merge merges outcome tokens back into collateral
@@ -345,6 +381,54 @@ func (cc *ContractCaller) getERC20Allowance(ctx context.Context, token, owner, s
 	}
 
 	return allowance, nil
+}
+
+// getERC20Balance returns the ERC20 balance for an account
+func (cc *ContractCaller) getERC20Balance(ctx context.Context, token, account common.Address) (*big.Int, error) {
+	erc20ABI := GetERC20ABI()
+	data, err := erc20ABI.Pack("balanceOf", account)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := cc.client.CallContract(ctx, ethereum.CallMsg{
+		To:   &token,
+		Data: data,
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var balance *big.Int
+	err = erc20ABI.UnpackIntoInterface(&balance, "balanceOf", result)
+	if err != nil {
+		return nil, err
+	}
+
+	return balance, nil
+}
+
+// waitForReceipt waits for a transaction receipt with timeout
+func (cc *ContractCaller) waitForReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error) {
+	// Create a context with timeout
+	timeoutCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
+	for {
+		receipt, err := cc.client.TransactionReceipt(timeoutCtx, txHash)
+		if err == nil {
+			return receipt, nil
+		}
+
+		// Check if context is done
+		select {
+		case <-timeoutCtx.Done():
+			return nil, fmt.Errorf("timeout waiting for transaction receipt: %s", txHash.Hex())
+		default:
+			// Wait a bit before retrying
+			time.Sleep(2 * time.Second)
+		}
+	}
 }
 
 // isApprovedForAll checks if an operator is approved for all tokens on ConditionalTokens

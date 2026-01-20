@@ -67,7 +67,7 @@ type FeeRateSettings struct {
 	Enabled         bool
 }
 
-// ERC20 ABI JSON for allowance and approve functions
+// ERC20 ABI JSON for allowance, approve, balanceOf, and decimals functions
 const erc20ABIJSON = `[
 	{
 		"constant": true,
@@ -91,6 +91,13 @@ const erc20ABIJSON = `[
 	},
 	{
 		"constant": true,
+		"inputs": [{"name": "account", "type": "address"}],
+		"name": "balanceOf",
+		"outputs": [{"name": "", "type": "uint256"}],
+		"type": "function"
+	},
+	{
+		"constant": true,
 		"inputs": [],
 		"name": "decimals",
 		"outputs": [{"name": "", "type": "uint8"}],
@@ -98,7 +105,7 @@ const erc20ABIJSON = `[
 	}
 ]`
 
-// ConditionalTokens ABI JSON for isApprovedForAll and setApprovalForAll
+// ConditionalTokens ABI JSON for splitPosition, mergePositions, redeemPositions, isApprovedForAll, setApprovalForAll, and balanceOf
 const conditionalTokensABIJSON = `[
 	{
 		"constant": true,
@@ -118,6 +125,54 @@ const conditionalTokensABIJSON = `[
 		],
 		"name": "setApprovalForAll",
 		"outputs": [],
+		"type": "function"
+	},
+	{
+		"constant": false,
+		"inputs": [
+			{"name": "collateralToken", "type": "address"},
+			{"name": "parentCollectionId", "type": "bytes32"},
+			{"name": "conditionId", "type": "bytes32"},
+			{"name": "partition", "type": "uint256[]"},
+			{"name": "amount", "type": "uint256"}
+		],
+		"name": "splitPosition",
+		"outputs": [],
+		"type": "function"
+	},
+	{
+		"constant": false,
+		"inputs": [
+			{"name": "collateralToken", "type": "address"},
+			{"name": "parentCollectionId", "type": "bytes32"},
+			{"name": "conditionId", "type": "bytes32"},
+			{"name": "partition", "type": "uint256[]"},
+			{"name": "amount", "type": "uint256"}
+		],
+		"name": "mergePositions",
+		"outputs": [],
+		"type": "function"
+	},
+	{
+		"constant": false,
+		"inputs": [
+			{"name": "collateralToken", "type": "address"},
+			{"name": "parentCollectionId", "type": "bytes32"},
+			{"name": "conditionId", "type": "bytes32"},
+			{"name": "indexSets", "type": "uint256[]"}
+		],
+		"name": "redeemPositions",
+		"outputs": [],
+		"type": "function"
+	},
+	{
+		"constant": true,
+		"inputs": [
+			{"name": "owner", "type": "address"},
+			{"name": "id", "type": "uint256"}
+		],
+		"name": "balanceOf",
+		"outputs": [{"name": "", "type": "uint256"}],
 		"type": "function"
 	}
 ]`
