@@ -7,7 +7,7 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -16,15 +16,15 @@ import (
 
 // ContractCaller handles blockchain contract interactions
 type ContractCaller struct {
-	client                  *ethclient.Client
-	privateKey             *ecdsa.PrivateKey
-	multiSigAddr           common.Address
-	conditionalTokensAddr  common.Address
-	multisendAddr           common.Address
-	feeManagerAddr          common.Address
+	client                     *ethclient.Client
+	privateKey                 *ecdsa.PrivateKey
+	multiSigAddr               common.Address
+	conditionalTokensAddr      common.Address
+	multisendAddr              common.Address
+	feeManagerAddr             common.Address
 	enableTradingCheckInterval time.Duration
-	enableTradingLastTime   time.Time
-	tokenDecimalsCache      map[string]int
+	enableTradingLastTime      time.Time
+	tokenDecimalsCache         map[string]int
 }
 
 // NewContractCaller creates a new ContractCaller instance
@@ -48,14 +48,14 @@ func NewContractCaller(
 	}
 
 	return &ContractCaller{
-		client:                  client,
-		privateKey:              privateKey,
-		multiSigAddr:            common.HexToAddress(multiSigAddr),
-		conditionalTokensAddr:  common.HexToAddress(conditionalTokensAddr),
-		multisendAddr:           common.HexToAddress(multisendAddr),
-		feeManagerAddr:           common.HexToAddress(feeManagerAddr),
+		client:                     client,
+		privateKey:                 privateKey,
+		multiSigAddr:               common.HexToAddress(multiSigAddr),
+		conditionalTokensAddr:      common.HexToAddress(conditionalTokensAddr),
+		multisendAddr:              common.HexToAddress(multisendAddr),
+		feeManagerAddr:             common.HexToAddress(feeManagerAddr),
 		enableTradingCheckInterval: enableTradingCheckInterval,
-		tokenDecimalsCache:      make(map[string]int),
+		tokenDecimalsCache:         make(map[string]int),
 	}, nil
 }
 
@@ -69,6 +69,11 @@ func (cc *ContractCaller) GetSignerAddress() common.Address {
 // GetMultiSigAddress returns the multi-sig address
 func (cc *ContractCaller) GetMultiSigAddress() common.Address {
 	return cc.multiSigAddr
+}
+
+// GetPrivateKey returns the signer's private key (needed for order signing)
+func (cc *ContractCaller) GetPrivateKey() *ecdsa.PrivateKey {
+	return cc.privateKey
 }
 
 // CheckGasBalance checks if signer has enough gas tokens
@@ -87,10 +92,10 @@ func (cc *ContractCaller) CheckGasBalance(ctx context.Context, estimatedGas uint
 	// Add 20% safety margin
 	estimatedGasWithMargin := new(big.Int).Mul(big.NewInt(int64(estimatedGas)), big.NewInt(120))
 	estimatedGasWithMargin.Div(estimatedGasWithMargin, big.NewInt(100))
-	
+
 	requiredEth := new(big.Int).Mul(estimatedGasWithMargin, gasPrice)
 
-		if balance.Cmp(requiredEth) < 0 {
+	if balance.Cmp(requiredEth) < 0 {
 		return fmt.Errorf("insufficient gas balance: signer %s has %s ETH, but needs approximately %s ETH for gas",
 			signerAddr.Hex(),
 			balance.String(),
@@ -104,17 +109,40 @@ func (cc *ContractCaller) CheckGasBalance(ctx context.Context, estimatedGas uint
 // GetTokenDecimals gets token decimals with caching
 func (cc *ContractCaller) GetTokenDecimals(ctx context.Context, tokenAddr common.Address) (int, error) {
 	tokenKey := tokenAddr.Hex()
-	
+
 	if decimals, ok := cc.tokenDecimalsCache[tokenKey]; ok {
 		return decimals, nil
 	}
 
-	// TODO: Implement proper ERC20 decimals() call using ERC20 ABI
-	// This is a simplified version - in production, you'd use the ERC20 ABI
-	decimals := 18 // Default to 18
-	
-	cc.tokenDecimalsCache[tokenKey] = decimals
-	return decimals, nil
+	// Call ERC20 decimals() function
+	erc20ABI := GetERC20ABI()
+	data, err := erc20ABI.Pack("decimals")
+	if err != nil {
+		// Fallback to 18 if we can't even pack the call
+		cc.tokenDecimalsCache[tokenKey] = 18
+		return 18, nil
+	}
+
+	result, err := cc.client.CallContract(ctx, ethereum.CallMsg{
+		To:   &tokenAddr,
+		Data: data,
+	}, nil)
+	if err != nil {
+		// Default to 18 if call fails (standard for most tokens)
+		cc.tokenDecimalsCache[tokenKey] = 18
+		return 18, nil
+	}
+
+	var decimals uint8
+	err = erc20ABI.UnpackIntoInterface(&decimals, "decimals", result)
+	if err != nil {
+		// Default to 18 if unpacking fails
+		cc.tokenDecimalsCache[tokenKey] = 18
+		return 18, nil
+	}
+
+	cc.tokenDecimalsCache[tokenKey] = int(decimals)
+	return int(decimals), nil
 }
 
 // Split splits collateral into outcome tokens
@@ -123,28 +151,65 @@ func (cc *ContractCaller) Split(ctx context.Context, collateralToken common.Addr
 		return nil, err
 	}
 
-	// TODO: Check balance using ERC20 contract ABI
-	// In production, you'd call the ERC20 contract to check balance
-	// For now, this is a placeholder
-
-	// TODO: Implement splitPosition using ConditionalTokens contract ABI
-	// Build transaction data for splitPosition
-	// This would use the ConditionalTokens ABI in production
-	// For now, returning a placeholder transaction
-	
-	auth, err := bind.NewKeyedTransactorWithChainID(cc.privateKey, big.NewInt(56))
+	// Check balance of collateral token
+	balance, err := cc.getERC20Balance(ctx, collateralToken, cc.multiSigAddr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get collateral balance: %w", err)
+	}
+	if balance.Cmp(amount) < 0 {
+		return nil, fmt.Errorf("insufficient collateral balance: has %s, needs %s", balance.String(), amount.String())
 	}
 
-	// Placeholder - actual implementation would call conditionalTokens.splitPosition
-	// This requires the ConditionalTokens contract ABI
-	_ = collateralToken
-	_ = conditionID
-	_ = amount
-	_ = auth
+	// Build splitPosition call data
+	conditionalTokensABI := GetConditionalTokensABI()
 
-	return nil, fmt.Errorf("split not fully implemented - requires ConditionalTokens ABI")
+	// Convert conditionID to [32]byte
+	var conditionIDBytes32 [32]byte
+	copy(conditionIDBytes32[:], conditionID)
+
+	// parentCollectionId is NULL_HASH (all zeros)
+	var parentCollectionID [32]byte
+
+	// partition = [1, 2] for binary markets (YES and NO outcomes)
+	partition := []*big.Int{big.NewInt(1), big.NewInt(2)}
+
+	splitData, err := conditionalTokensABI.Pack("splitPosition",
+		collateralToken,
+		parentCollectionID,
+		conditionIDBytes32,
+		partition,
+		amount,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to pack splitPosition: %w", err)
+	}
+
+	// Build multisend transaction
+	multiSendTxs := []MultiSendTx{
+		{
+			Operation: MultiSendOperationCall,
+			To:        cc.conditionalTokensAddr,
+			Value:     big.NewInt(0),
+			Data:      splitData,
+		},
+	}
+
+	// Execute via multisend
+	tx, err := cc.executeMultisend(ctx, multiSendTxs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute splitPosition: %w", err)
+	}
+
+	// Wait for transaction receipt and validate
+	receipt, err := cc.waitForReceipt(ctx, tx.Hash())
+	if err != nil {
+		return nil, fmt.Errorf("failed to wait for split transaction: %w", err)
+	}
+	if receipt.Status != 1 {
+		return nil, fmt.Errorf("split transaction failed: tx hash %s", tx.Hash().Hex())
+	}
+
+	return tx, nil
 }
 
 // Merge merges outcome tokens back into collateral
@@ -153,13 +218,74 @@ func (cc *ContractCaller) Merge(ctx context.Context, collateralToken common.Addr
 		return nil, err
 	}
 
-	// TODO: Implement mergePositions using ConditionalTokens contract ABI
-	// Placeholder implementation
-	_ = collateralToken
-	_ = conditionID
-	_ = amount
+	conditionalTokensABI := GetConditionalTokensABI()
 
-	return nil, fmt.Errorf("merge not fully implemented - requires ConditionalTokens ABI")
+	// Convert conditionID to [32]byte
+	var conditionIDBytes32 [32]byte
+	copy(conditionIDBytes32[:], conditionID)
+
+	// parentCollectionId is NULL_HASH (all zeros)
+	var parentCollectionID [32]byte
+
+	// partition = [1, 2] for binary markets (YES and NO outcomes)
+	partition := []*big.Int{big.NewInt(1), big.NewInt(2)}
+
+	// Check balance of positions for each partition index
+	for _, indexSet := range partition {
+		positionID, err := cc.getPositionID(ctx, conditionIDBytes32, indexSet, collateralToken, parentCollectionID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get position ID: %w", err)
+		}
+
+		balance, err := cc.getConditionalTokenBalance(ctx, cc.multiSigAddr, positionID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get position balance: %w", err)
+		}
+
+		if balance.Cmp(amount) < 0 {
+			return nil, fmt.Errorf("insufficient position balance for index set %s: has %s, needs %s",
+				indexSet.String(), balance.String(), amount.String())
+		}
+	}
+
+	// Build mergePositions call data
+	mergeData, err := conditionalTokensABI.Pack("mergePositions",
+		collateralToken,
+		parentCollectionID,
+		conditionIDBytes32,
+		partition,
+		amount,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to pack mergePositions: %w", err)
+	}
+
+	// Build multisend transaction
+	multiSendTxs := []MultiSendTx{
+		{
+			Operation: MultiSendOperationCall,
+			To:        cc.conditionalTokensAddr,
+			Value:     big.NewInt(0),
+			Data:      mergeData,
+		},
+	}
+
+	// Execute via multisend
+	tx, err := cc.executeMultisend(ctx, multiSendTxs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute mergePositions: %w", err)
+	}
+
+	// Wait for transaction receipt and validate
+	receipt, err := cc.waitForReceipt(ctx, tx.Hash())
+	if err != nil {
+		return nil, fmt.Errorf("failed to wait for merge transaction: %w", err)
+	}
+	if receipt.Status != 1 {
+		return nil, fmt.Errorf("merge transaction failed: tx hash %s", tx.Hash().Hex())
+	}
+
+	return tx, nil
 }
 
 // Redeem redeems winning outcome tokens for collateral
@@ -168,15 +294,85 @@ func (cc *ContractCaller) Redeem(ctx context.Context, collateralToken common.Add
 		return nil, err
 	}
 
-	// TODO: Implement redeemPositions using ConditionalTokens contract ABI
-	// Placeholder implementation
-	_ = collateralToken
-	_ = conditionID
+	conditionalTokensABI := GetConditionalTokensABI()
 
-	return nil, fmt.Errorf("redeem not fully implemented - requires ConditionalTokens ABI")
+	// Convert conditionID to [32]byte
+	var conditionIDBytes32 [32]byte
+	copy(conditionIDBytes32[:], conditionID)
+
+	// parentCollectionId is NULL_HASH (all zeros)
+	var parentCollectionID [32]byte
+
+	// partition = [1, 2] for binary markets (YES and NO outcomes)
+	partition := []*big.Int{big.NewInt(1), big.NewInt(2)}
+
+	// Check if user has any positions to redeem
+	hasPositions := false
+	for _, indexSet := range partition {
+		positionID, err := cc.getPositionID(ctx, conditionIDBytes32, indexSet, collateralToken, parentCollectionID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get position ID: %w", err)
+		}
+
+		balance, err := cc.getConditionalTokenBalance(ctx, cc.multiSigAddr, positionID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get position balance: %w", err)
+		}
+
+		if balance.Sign() > 0 {
+			hasPositions = true
+			break
+		}
+	}
+
+	if !hasPositions {
+		return nil, fmt.Errorf("no positions to redeem")
+	}
+
+	// Build redeemPositions call data
+	redeemData, err := conditionalTokensABI.Pack("redeemPositions",
+		collateralToken,
+		parentCollectionID,
+		conditionIDBytes32,
+		partition,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to pack redeemPositions: %w", err)
+	}
+
+	// Build multisend transaction
+	multiSendTxs := []MultiSendTx{
+		{
+			Operation: MultiSendOperationCall,
+			To:        cc.conditionalTokensAddr,
+			Value:     big.NewInt(0),
+			Data:      redeemData,
+		},
+	}
+
+	// Execute via multisend
+	tx, err := cc.executeMultisend(ctx, multiSendTxs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute redeemPositions: %w", err)
+	}
+
+	// Wait for transaction receipt and validate
+	receipt, err := cc.waitForReceipt(ctx, tx.Hash())
+	if err != nil {
+		return nil, fmt.Errorf("failed to wait for redeem transaction: %w", err)
+	}
+	if receipt.Status != 1 {
+		return nil, fmt.Errorf("redeem transaction failed: tx hash %s", tx.Hash().Hex())
+	}
+
+	return tx, nil
 }
 
-// EnableTrading enables trading by approving necessary tokens
+// EnableTrading enables trading by approving necessary tokens.
+// This checks ERC20 allowances and builds approval transactions for:
+// 1. ERC20 tokens -> CTF Exchange (for trading)
+// 2. ERC20 tokens -> ConditionalTokens (for splitting)
+// 3. ConditionalTokens -> CTF Exchange (setApprovalForAll)
 func (cc *ContractCaller) EnableTrading(ctx context.Context, supportedQuoteTokens map[string]string) (*types.Transaction, error) {
 	// Check if we should skip based on interval
 	if !cc.enableTradingLastTime.IsZero() {
@@ -191,23 +387,428 @@ func (cc *ContractCaller) EnableTrading(ctx context.Context, supportedQuoteToken
 		return nil, err
 	}
 
-	// TODO: Implement full enable trading functionality:
-	// 1. Check allowances for each quote token using ERC20 ABI
-	// 2. Build multisend transaction with approvals
-	// 3. Execute via Safe wallet (requires Safe wallet integration)
-	// Placeholder implementation
-	_ = supportedQuoteTokens
+	// Collect all approval transactions to execute via multisend
+	var multiSendTxs []MultiSendTx
 
-	return nil, fmt.Errorf("enable_trading not fully implemented - requires Safe wallet and ERC20 ABIs")
+	// ERC20 ABI for allowance and approve functions
+	erc20ABI := GetERC20ABI()
+
+	for erc20Address, ctfExchangeAddress := range supportedQuoteTokens {
+		erc20Addr := common.HexToAddress(erc20Address)
+		ctfExchangeAddr := common.HexToAddress(ctfExchangeAddress)
+
+		// Get token decimals
+		decimals, err := cc.GetTokenDecimals(ctx, erc20Addr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get decimals for %s: %w", erc20Address, err)
+		}
+
+		// Calculate minimum threshold: 1 billion * 10^decimals
+		minThreshold := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil)
+		minThreshold = minThreshold.Mul(minThreshold, big.NewInt(1000000000))
+
+		// Unlimited approval amount (max uint256)
+		maxUint256 := new(big.Int).Sub(new(big.Int).Exp(big.NewInt(2), big.NewInt(256), nil), big.NewInt(1))
+
+		// Check allowance for CTF Exchange
+		allowance, err := cc.getERC20Allowance(ctx, erc20Addr, cc.multiSigAddr, ctfExchangeAddr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get allowance: %w", err)
+		}
+
+		if allowance.Cmp(minThreshold) < 0 {
+			// If there's existing allowance > 0, reset to 0 first (USDT-style protection)
+			if allowance.Sign() > 0 {
+				resetData, err := erc20ABI.Pack("approve", ctfExchangeAddr, big.NewInt(0))
+				if err != nil {
+					return nil, fmt.Errorf("failed to pack reset approve: %w", err)
+				}
+				multiSendTxs = append(multiSendTxs, MultiSendTx{
+					Operation: MultiSendOperationCall,
+					To:        erc20Addr,
+					Value:     big.NewInt(0),
+					Data:      resetData,
+				})
+			}
+
+			// Approve unlimited allowance
+			approveData, err := erc20ABI.Pack("approve", ctfExchangeAddr, maxUint256)
+			if err != nil {
+				return nil, fmt.Errorf("failed to pack approve: %w", err)
+			}
+			multiSendTxs = append(multiSendTxs, MultiSendTx{
+				Operation: MultiSendOperationCall,
+				To:        erc20Addr,
+				Value:     big.NewInt(0),
+				Data:      approveData,
+			})
+		}
+
+		// Check allowance for ConditionalTokens (used for splitting)
+		allowanceForCT, err := cc.getERC20Allowance(ctx, erc20Addr, cc.multiSigAddr, cc.conditionalTokensAddr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get allowance for conditional tokens: %w", err)
+		}
+
+		if allowanceForCT.Cmp(minThreshold) < 0 {
+			// Reset to 0 first if needed
+			if allowanceForCT.Sign() > 0 {
+				resetData, err := erc20ABI.Pack("approve", cc.conditionalTokensAddr, big.NewInt(0))
+				if err != nil {
+					return nil, fmt.Errorf("failed to pack reset approve for CT: %w", err)
+				}
+				multiSendTxs = append(multiSendTxs, MultiSendTx{
+					Operation: MultiSendOperationCall,
+					To:        erc20Addr,
+					Value:     big.NewInt(0),
+					Data:      resetData,
+				})
+			}
+
+			// Approve unlimited allowance
+			approveData, err := erc20ABI.Pack("approve", cc.conditionalTokensAddr, maxUint256)
+			if err != nil {
+				return nil, fmt.Errorf("failed to pack approve for CT: %w", err)
+			}
+			multiSendTxs = append(multiSendTxs, MultiSendTx{
+				Operation: MultiSendOperationCall,
+				To:        erc20Addr,
+				Value:     big.NewInt(0),
+				Data:      approveData,
+			})
+		}
+
+		// Check if CTF Exchange is approved for all on ConditionalTokens
+		isApprovedForAll, err := cc.isApprovedForAll(ctx, cc.multiSigAddr, ctfExchangeAddr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check isApprovedForAll: %w", err)
+		}
+
+		if !isApprovedForAll {
+			conditionalTokensABI := GetConditionalTokensABI()
+			setApprovalData, err := conditionalTokensABI.Pack("setApprovalForAll", ctfExchangeAddr, true)
+			if err != nil {
+				return nil, fmt.Errorf("failed to pack setApprovalForAll: %w", err)
+			}
+			multiSendTxs = append(multiSendTxs, MultiSendTx{
+				Operation: MultiSendOperationCall,
+				To:        cc.conditionalTokensAddr,
+				Value:     big.NewInt(0),
+				Data:      setApprovalData,
+			})
+		}
+	}
+
+	// If no approvals needed, return nil transaction
+	if len(multiSendTxs) == 0 {
+		return nil, nil
+	}
+
+	// Execute all approvals via multisend
+	tx, err := cc.executeMultisend(ctx, multiSendTxs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute multisend: %w", err)
+	}
+
+	return tx, nil
+}
+
+// getERC20Allowance returns the ERC20 allowance for owner to spender
+func (cc *ContractCaller) getERC20Allowance(ctx context.Context, token, owner, spender common.Address) (*big.Int, error) {
+	erc20ABI := GetERC20ABI()
+	data, err := erc20ABI.Pack("allowance", owner, spender)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := cc.client.CallContract(ctx, ethereum.CallMsg{
+		To:   &token,
+		Data: data,
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var allowance *big.Int
+	err = erc20ABI.UnpackIntoInterface(&allowance, "allowance", result)
+	if err != nil {
+		return nil, err
+	}
+
+	return allowance, nil
+}
+
+// getERC20Balance returns the ERC20 balance for an account
+func (cc *ContractCaller) getERC20Balance(ctx context.Context, token, account common.Address) (*big.Int, error) {
+	erc20ABI := GetERC20ABI()
+	data, err := erc20ABI.Pack("balanceOf", account)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := cc.client.CallContract(ctx, ethereum.CallMsg{
+		To:   &token,
+		Data: data,
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var balance *big.Int
+	err = erc20ABI.UnpackIntoInterface(&balance, "balanceOf", result)
+	if err != nil {
+		return nil, err
+	}
+
+	return balance, nil
+}
+
+// waitForReceipt waits for a transaction receipt with timeout
+func (cc *ContractCaller) waitForReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error) {
+	// Create a context with timeout
+	timeoutCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
+	for {
+		receipt, err := cc.client.TransactionReceipt(timeoutCtx, txHash)
+		if err == nil {
+			return receipt, nil
+		}
+
+		// Check if context is done
+		select {
+		case <-timeoutCtx.Done():
+			return nil, fmt.Errorf("timeout waiting for transaction receipt: %s", txHash.Hex())
+		default:
+			// Wait a bit before retrying
+			time.Sleep(2 * time.Second)
+		}
+	}
+}
+
+// isApprovedForAll checks if an operator is approved for all tokens on ConditionalTokens
+func (cc *ContractCaller) isApprovedForAll(ctx context.Context, owner, operator common.Address) (bool, error) {
+	conditionalTokensABI := GetConditionalTokensABI()
+	data, err := conditionalTokensABI.Pack("isApprovedForAll", owner, operator)
+	if err != nil {
+		return false, err
+	}
+
+	result, err := cc.client.CallContract(ctx, ethereum.CallMsg{
+		To:   &cc.conditionalTokensAddr,
+		Data: data,
+	}, nil)
+	if err != nil {
+		return false, err
+	}
+
+	var approved bool
+	err = conditionalTokensABI.UnpackIntoInterface(&approved, "isApprovedForAll", result)
+	if err != nil {
+		return false, err
+	}
+
+	return approved, nil
+}
+
+// getPositionID gets the position ID for conditional tokens
+func (cc *ContractCaller) getPositionID(ctx context.Context, conditionID [32]byte, indexSet *big.Int, collateralToken common.Address, parentCollectionID [32]byte) (*big.Int, error) {
+	conditionalTokensABI := GetConditionalTokensABI()
+
+	// Get collection ID first
+	collectionData, err := conditionalTokensABI.Pack("getCollectionId", parentCollectionID, conditionID, indexSet)
+	if err != nil {
+		return nil, fmt.Errorf("failed to pack getCollectionId: %w", err)
+	}
+
+	collectionResult, err := cc.client.CallContract(ctx, ethereum.CallMsg{
+		To:   &cc.conditionalTokensAddr,
+		Data: collectionData,
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call getCollectionId: %w", err)
+	}
+
+	var collectionID [32]byte
+	err = conditionalTokensABI.UnpackIntoInterface(&collectionID, "getCollectionId", collectionResult)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unpack getCollectionId: %w", err)
+	}
+
+	// Get position ID from collection ID
+	positionData, err := conditionalTokensABI.Pack("getPositionId", collateralToken, collectionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to pack getPositionId: %w", err)
+	}
+
+	positionResult, err := cc.client.CallContract(ctx, ethereum.CallMsg{
+		To:   &cc.conditionalTokensAddr,
+		Data: positionData,
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call getPositionId: %w", err)
+	}
+
+	var positionID *big.Int
+	err = conditionalTokensABI.UnpackIntoInterface(&positionID, "getPositionId", positionResult)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unpack getPositionId: %w", err)
+	}
+
+	return positionID, nil
+}
+
+// getConditionalTokenBalance gets the balance of conditional tokens for an account
+func (cc *ContractCaller) getConditionalTokenBalance(ctx context.Context, account common.Address, positionID *big.Int) (*big.Int, error) {
+	conditionalTokensABI := GetConditionalTokensABI()
+	data, err := conditionalTokensABI.Pack("balanceOf", account, positionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to pack balanceOf: %w", err)
+	}
+
+	result, err := cc.client.CallContract(ctx, ethereum.CallMsg{
+		To:   &cc.conditionalTokensAddr,
+		Data: data,
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call balanceOf: %w", err)
+	}
+
+	var balance *big.Int
+	err = conditionalTokensABI.UnpackIntoInterface(&balance, "balanceOf", result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unpack balanceOf: %w", err)
+	}
+
+	return balance, nil
+}
+
+// MultiSendTx represents a single transaction in a multisend batch
+type MultiSendTx struct {
+	Operation uint8
+	To        common.Address
+	Value     *big.Int
+	Data      []byte
+}
+
+const (
+	MultiSendOperationCall         uint8 = 0
+	MultiSendOperationDelegateCall uint8 = 1
+)
+
+// executeMultisend executes multiple transactions via the multisend contract
+func (cc *ContractCaller) executeMultisend(ctx context.Context, txs []MultiSendTx) (*types.Transaction, error) {
+	// Build encoded multisend data
+	var encodedTxs []byte
+	for _, tx := range txs {
+		// Encode: operation (1 byte) + to (20 bytes) + value (32 bytes) + dataLength (32 bytes) + data
+		packed := make([]byte, 0)
+		packed = append(packed, tx.Operation)
+		packed = append(packed, tx.To.Bytes()...)
+		packed = append(packed, common.LeftPadBytes(tx.Value.Bytes(), 32)...)
+		packed = append(packed, common.LeftPadBytes(big.NewInt(int64(len(tx.Data))).Bytes(), 32)...)
+		packed = append(packed, tx.Data...)
+		encodedTxs = append(encodedTxs, packed...)
+	}
+
+	multisendABI := GetMultisendABI()
+	callData, err := multisendABI.Pack("multiSend", encodedTxs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to pack multisend: %w", err)
+	}
+
+	// Build and sign transaction
+	chainID, err := cc.client.ChainID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get chain ID: %w", err)
+	}
+
+	nonce, err := cc.client.PendingNonceAt(ctx, cc.GetSignerAddress())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get nonce: %w", err)
+	}
+
+	gasPrice, err := cc.client.SuggestGasPrice(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get gas price: %w", err)
+	}
+
+	tx := types.NewTransaction(
+		nonce,
+		cc.multisendAddr,
+		big.NewInt(0),
+		uint64(500000),
+		gasPrice,
+		callData,
+	)
+
+	signedTx, err := types.SignTx(tx, types.NewEIP155Signer(chainID), cc.privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign transaction: %w", err)
+	}
+
+	if err := cc.client.SendTransaction(ctx, signedTx); err != nil {
+		return nil, fmt.Errorf("failed to send transaction: %w", err)
+	}
+
+	return signedTx, nil
 }
 
 // GetFeeRateSettings gets fee rate settings from FeeManager contract
 func (cc *ContractCaller) GetFeeRateSettings(ctx context.Context, tokenID *big.Int) (*FeeRateSettings, error) {
-	// TODO: Implement getFeeRateSettings call using FeeManager contract ABI
-	// In production, this would call feeManager.getFeeRateSettings(tokenID)
-	_ = tokenID
+	feeManagerABI := GetFeeManagerABI()
 
-	return nil, fmt.Errorf("get_fee_rate_settings not fully implemented - requires FeeManager ABI")
+	data, err := feeManagerABI.Pack("getFeeRateSettings", tokenID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to pack getFeeRateSettings: %w", err)
+	}
+
+	result, err := cc.client.CallContract(ctx, ethereum.CallMsg{
+		To:   &cc.feeManagerAddr,
+		Data: data,
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call getFeeRateSettings: %w", err)
+	}
+
+	// Unpack the result - returns (makerFeeRateBps, takerFeeRateBps, enabled, minFeeAmount)
+	var (
+		makerFeeRateBps *big.Int
+		takerFeeRateBps *big.Int
+		enabled         bool
+		minFeeAmount    *big.Int
+	)
+
+	// Create a struct to unpack into
+	type feeRateResult struct {
+		MakerFeeRateBps *big.Int
+		TakerFeeRateBps *big.Int
+		Enabled         bool
+		MinFeeAmount    *big.Int
+	}
+
+	var unpacked feeRateResult
+	err = feeManagerABI.UnpackIntoInterface(&unpacked, "getFeeRateSettings", result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unpack getFeeRateSettings: %w", err)
+	}
+
+	makerFeeRateBps = unpacked.MakerFeeRateBps
+	takerFeeRateBps = unpacked.TakerFeeRateBps
+	enabled = unpacked.Enabled
+	_ = minFeeAmount // Not used in the current FeeRateSettings struct
+
+	// Convert basis points to max fee rate percentage
+	// Formula: fee_rate_bps * 0.25 / 10000
+	// Example: 800 * 0.25 / 10000 = 0.02 (2%)
+	makerMaxFeeRate := float64(makerFeeRateBps.Int64()) * 0.25 / 10000
+	takerMaxFeeRate := float64(takerFeeRateBps.Int64()) * 0.25 / 10000
+
+	return &FeeRateSettings{
+		MakerMaxFeeRate: makerMaxFeeRate,
+		TakerMaxFeeRate: takerMaxFeeRate,
+		Enabled:         enabled,
+	}, nil
 }
 
 // Close closes the Ethereum client connection
@@ -216,4 +817,3 @@ func (cc *ContractCaller) Close() {
 		cc.client.Close()
 	}
 }
-

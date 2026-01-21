@@ -2,28 +2,29 @@ package opinionclob
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/metfin/opinion-clob-sdk-go/chain"
 )
 
 // Client is the main SDK client
 type Client struct {
-	apiClient              *APIClient
-	contractCaller         *chain.ContractCaller
-	chainID                ChainID
-	quoteTokensCache       interface{}
-	quoteTokensCacheTime   time.Time
-	quoteTokensCacheTTL     time.Duration
-	marketCache            map[int]cacheEntry
-	marketCacheTTL         time.Duration
-	cacheMutex             sync.RWMutex
+	apiClient            *APIClient
+	contractCaller       *chain.ContractCaller
+	chainID              ChainID
+	quoteTokensCache     interface{}
+	quoteTokensCacheTime time.Time
+	quoteTokensCacheTTL  time.Duration
+	marketCache          map[int]cacheEntry
+	marketCacheTTL       time.Duration
+	cacheMutex           sync.RWMutex
 }
 
 type cacheEntry struct {
@@ -33,18 +34,18 @@ type cacheEntry struct {
 
 // ClientConfig holds configuration for creating a Client
 type ClientConfig struct {
-	Host                      string
-	APIKey                    string
-	ChainID                   ChainID
-	RPCURL                    string
-	PrivateKey                string
-	MultiSigAddr              string
-	ConditionalTokensAddr     string
-	MultisendAddr             string
-	FeeManagerAddr            string
+	Host                       string
+	APIKey                     string
+	ChainID                    ChainID
+	RPCURL                     string
+	PrivateKey                 string
+	MultiSigAddr               string
+	ConditionalTokensAddr      string
+	MultisendAddr              string
+	FeeManagerAddr             string
 	EnableTradingCheckInterval time.Duration
-	QuoteTokensCacheTTL       time.Duration
-	MarketCacheTTL            time.Duration
+	QuoteTokensCacheTTL        time.Duration
+	MarketCacheTTL             time.Duration
 }
 
 // NewClient creates a new Opinion CLOB SDK client
@@ -104,12 +105,12 @@ func NewClient(config ClientConfig) (*Client, error) {
 	}
 
 	return &Client{
-		apiClient:              apiClient,
-		contractCaller:         contractCaller,
-		chainID:                config.ChainID,
-		quoteTokensCacheTTL:     config.QuoteTokensCacheTTL,
-		marketCacheTTL:         config.MarketCacheTTL,
-		marketCache:            make(map[int]cacheEntry),
+		apiClient:           apiClient,
+		contractCaller:      contractCaller,
+		chainID:             config.ChainID,
+		quoteTokensCacheTTL: config.QuoteTokensCacheTTL,
+		marketCacheTTL:      config.MarketCacheTTL,
+		marketCache:         make(map[int]cacheEntry),
 	}, nil
 }
 
@@ -127,12 +128,20 @@ func (c *Client) EnableTrading(ctx context.Context) (*TransactionResult, error) 
 		return nil, err
 	}
 
-	// TODO: Parse quote token response to extract quote_token_address -> ctf_exchange_address mapping
-	// Parse quote tokens (simplified - in production, parse the actual response structure)
+	// Parse quote token response to extract quote_token_address -> ctf_exchange_address mapping
 	supportedQuoteTokens := make(map[string]string)
-	// This would parse the actual response in production
-	_ = quoteTokenListResponse
-	_ = supportedQuoteTokens
+
+	for _, quoteToken := range quoteTokenListResponse.Result.List {
+		quoteTokenAddress := common.HexToAddress(quoteToken.QuoteTokenAddress).Hex()
+		ctfExchangeAddress := common.HexToAddress(quoteToken.CTFExchangeAddress).Hex()
+		supportedQuoteTokens[quoteTokenAddress] = ctfExchangeAddress
+	}
+
+	fmt.Printf("Supported quote tokens: %v\n", supportedQuoteTokens)
+
+	if len(supportedQuoteTokens) == 0 {
+		return nil, &OpenAPIError{Message: "No supported quote tokens found"}
+	}
 
 	tx, err := c.contractCaller.EnableTrading(ctx, supportedQuoteTokens)
 	if err != nil {
@@ -170,24 +179,36 @@ func (c *Client) Split(ctx context.Context, marketID int, amount *big.Int, check
 		}
 	}
 
-	marketResponse, err := c.GetMarket(marketID, true)
+	market, err := c.GetMarket(marketID, true)
 	if err != nil {
-		return nil, err
+		return nil, &OpenAPIError{Message: fmt.Sprintf("get market for split: %v", err)}
 	}
 
-	// TODO: Parse market response to extract condition_id, collateral, and chain_id
-	// Parse market data (simplified)
-	// In production, you'd parse the actual response structure
-	_ = marketResponse
+	// Validate chain_id matches
+	marketChainID, err := strconv.Atoi(market.ChainID)
+	if err != nil {
+		return nil, &OpenAPIError{Message: fmt.Sprintf("invalid market chain_id: %s", market.ChainID)}
+	}
+	if ChainID(marketChainID) != c.chainID {
+		return nil, &OpenAPIError{Message: "Cannot split on different chain"}
+	}
 
-	// Extract condition_id and collateral from market data
-	// This is a placeholder - actual implementation would parse the response
-	collateral := common.HexToAddress("0x0") // TODO: Extract from market data
-	conditionID := []byte{}                  // TODO: Extract from market data
+	// Validate market status (must be ACTIVATED, RESOLVED, or RESOLVING)
+	status := TopicStatus(market.Status)
+	if status != TopicStatusActivated && status != TopicStatusResolved && status != TopicStatusResolving {
+		return nil, &OpenAPIError{Message: "Cannot split on non-activated/resolving/resolved market"}
+	}
+
+	// Extract collateral (quote_token) and condition_id from market data
+	collateral := common.HexToAddress(market.QuoteToken)
+	conditionID, err := hex.DecodeString(market.ConditionID)
+	if err != nil {
+		return nil, &OpenAPIError{Message: fmt.Sprintf("invalid condition_id: %s", market.ConditionID)}
+	}
 
 	tx, err := c.contractCaller.Split(ctx, collateral, conditionID, amount)
 	if err != nil {
-		return nil, err
+		return nil, &OpenAPIError{Message: fmt.Sprintf("Failed to split collateral: %v", err)}
 	}
 
 	return &TransactionResult{
@@ -212,21 +233,36 @@ func (c *Client) Merge(ctx context.Context, marketID int, amount *big.Int, check
 		}
 	}
 
-	marketResponse, err := c.GetMarket(marketID, true)
+	market, err := c.GetMarket(marketID, true)
 	if err != nil {
-		return nil, err
+		return nil, &OpenAPIError{Message: fmt.Sprintf("get market for merge: %v", err)}
 	}
 
-	// TODO: Parse market response to extract condition_id and collateral
-	// Parse market data (simplified)
-	_ = marketResponse
+	// Validate chain_id matches
+	marketChainID, err := strconv.Atoi(market.ChainID)
+	if err != nil {
+		return nil, &OpenAPIError{Message: fmt.Sprintf("invalid market chain_id: %s", market.ChainID)}
+	}
+	if ChainID(marketChainID) != c.chainID {
+		return nil, &OpenAPIError{Message: "Cannot merge on different chain"}
+	}
 
-	collateral := common.HexToAddress("0x0") // TODO: Extract from market data
-	conditionID := []byte{}                  // TODO: Extract from market data
+	// Validate market status (must be ACTIVATED, RESOLVED, or RESOLVING)
+	status := TopicStatus(market.Status)
+	if status != TopicStatusActivated && status != TopicStatusResolved && status != TopicStatusResolving {
+		return nil, &OpenAPIError{Message: "Cannot merge on non-activated/resolving/resolved market"}
+	}
+
+	// Extract collateral (quote_token) and condition_id from market data
+	collateral := common.HexToAddress(market.QuoteToken)
+	conditionID, err := hex.DecodeString(market.ConditionID)
+	if err != nil {
+		return nil, &OpenAPIError{Message: fmt.Sprintf("invalid condition_id: %s", market.ConditionID)}
+	}
 
 	tx, err := c.contractCaller.Merge(ctx, collateral, conditionID, amount)
 	if err != nil {
-		return nil, err
+		return nil, &OpenAPIError{Message: fmt.Sprintf("Failed to merge tokens: %v", err)}
 	}
 
 	return &TransactionResult{
@@ -248,21 +284,36 @@ func (c *Client) Redeem(ctx context.Context, marketID int, checkApproval bool) (
 		}
 	}
 
-	marketResponse, err := c.GetMarket(marketID, true)
+	market, err := c.GetMarket(marketID, true)
 	if err != nil {
-		return nil, err
+		return nil, &OpenAPIError{Message: fmt.Sprintf("get market for redeem: %v", err)}
 	}
 
-	// TODO: Parse market response to extract condition_id and collateral
-	// Parse market data
-	_ = marketResponse
+	// Validate chain_id matches
+	marketChainID, err := strconv.Atoi(market.ChainID)
+	if err != nil {
+		return nil, &OpenAPIError{Message: fmt.Sprintf("invalid market chain_id: %s", market.ChainID)}
+	}
+	if ChainID(marketChainID) != c.chainID {
+		return nil, &OpenAPIError{Message: "Cannot redeem on different chain"}
+	}
 
-	collateral := common.HexToAddress("0x0") // TODO: Extract from market data
-	conditionID := []byte{}                  // TODO: Extract from market data
+	// Validate market status (must be RESOLVED for redemption)
+	status := TopicStatus(market.Status)
+	if status != TopicStatusResolved {
+		return nil, &OpenAPIError{Message: "Cannot redeem on non-resolved market"}
+	}
+
+	// Extract collateral (quote_token) and condition_id from market data
+	collateral := common.HexToAddress(market.QuoteToken)
+	conditionID, err := hex.DecodeString(market.ConditionID)
+	if err != nil {
+		return nil, &OpenAPIError{Message: fmt.Sprintf("invalid condition_id: %s", market.ConditionID)}
+	}
 
 	tx, err := c.contractCaller.Redeem(ctx, collateral, conditionID)
 	if err != nil {
-		return nil, err
+		return nil, &OpenAPIError{Message: fmt.Sprintf("Failed to redeem tokens: %v", err)}
 	}
 
 	return &TransactionResult{
@@ -273,14 +324,16 @@ func (c *Client) Redeem(ctx context.Context, marketID int, checkApproval bool) (
 }
 
 // GetQuoteTokens fetches the list of supported quote tokens
-func (c *Client) GetQuoteTokens(useCache bool) (interface{}, error) {
+func (c *Client) GetQuoteTokens(useCache bool) (*GetQuoteTokensResponse, error) {
 	c.cacheMutex.RLock()
 	if useCache && c.quoteTokensCacheTTL > 0 {
 		if c.quoteTokensCache != nil {
 			cacheAge := time.Since(c.quoteTokensCacheTime)
 			if cacheAge < c.quoteTokensCacheTTL {
 				c.cacheMutex.RUnlock()
-				return c.quoteTokensCache, nil
+				if cached, ok := c.quoteTokensCache.(*GetQuoteTokensResponse); ok {
+					return cached, nil
+				}
 			}
 		}
 	}
@@ -302,7 +355,7 @@ func (c *Client) GetQuoteTokens(useCache bool) (interface{}, error) {
 }
 
 // GetMarkets fetches markets with pagination and filters
-func (c *Client) GetMarkets(topicType TopicType, page, limit int, status *TopicStatusFilter, sortBy *TopicSortType) (interface{}, error) {
+func (c *Client) GetMarkets(topicType TopicType, page, limit int, status *TopicStatusFilter, sortBy *TopicSortType) (*GetMarketsResponse, error) {
 	if page < 1 {
 		return nil, &InvalidParamError{Message: "page must be >= 1"}
 	}
@@ -314,7 +367,7 @@ func (c *Client) GetMarkets(topicType TopicType, page, limit int, status *TopicS
 }
 
 // GetMarket fetches detailed information about a specific market
-func (c *Client) GetMarket(marketID int, useCache bool) (interface{}, error) {
+func (c *Client) GetMarket(marketID int, useCache bool) (*Market, error) {
 	if marketID <= 0 {
 		return nil, &InvalidParamError{Message: "market_id is required"}
 	}
@@ -325,7 +378,9 @@ func (c *Client) GetMarket(marketID int, useCache bool) (interface{}, error) {
 			cacheAge := time.Since(entry.timestamp)
 			if cacheAge < c.marketCacheTTL {
 				c.cacheMutex.RUnlock()
-				return entry.data, nil
+				if market, ok := entry.data.(*Market); ok {
+					return market, nil
+				}
 			}
 		}
 	}
@@ -336,16 +391,18 @@ func (c *Client) GetMarket(marketID int, useCache bool) (interface{}, error) {
 		return nil, err
 	}
 
+	market := &result.Result.Data
+
 	c.cacheMutex.Lock()
 	if c.marketCacheTTL > 0 {
 		c.marketCache[marketID] = cacheEntry{
-			data:      result,
+			data:      market,
 			timestamp: time.Now(),
 		}
 	}
 	c.cacheMutex.Unlock()
 
-	return result, nil
+	return market, nil
 }
 
 // GetCategoricalMarket fetches detailed information about a categorical market
@@ -412,50 +469,149 @@ func (c *Client) GetFeeRates(ctx context.Context, tokenID int) (*FeeRateSettings
 
 // PlaceOrder places an order on the market
 func (c *Client) PlaceOrder(ctx context.Context, data PlaceOrderDataInput, checkApproval bool) (interface{}, error) {
+	// Enable trading first if requested
+	if checkApproval {
+		if _, err := c.EnableTrading(ctx); err != nil {
+			return nil, err
+		}
+	}
+
 	// Get quote tokens
 	quoteTokenListResponse, err := c.GetQuoteTokens(true)
 	if err != nil {
-		return nil, err
+		return nil, &OpenAPIError{Message: fmt.Sprintf("failed to get quote tokens: %v", err)}
 	}
 
 	// Get market data
-	marketResponse, err := c.GetMarket(data.MarketID, true)
+	market, err := c.GetMarket(data.MarketID, true)
 	if err != nil {
-		return nil, err
+		return nil, &OpenAPIError{Message: fmt.Sprintf("failed to get market: %v", err)}
 	}
 
-	// TODO: Parse quote token response to extract exchange address and decimals
-	// Parse responses (simplified)
-	_ = quoteTokenListResponse
-	_ = marketResponse
-
-	// TODO: Get private key from client config instead of hardcoded empty string
-	// Build order
-	privateKey, err := crypto.HexToECDSA("") // Would come from config
+	// Validate chain ID matches
+	marketChainID, err := strconv.Atoi(market.ChainID)
 	if err != nil {
-		return nil, err
+		return nil, &OpenAPIError{Message: fmt.Sprintf("invalid market chain_id: %s", market.ChainID)}
+	}
+	if ChainID(marketChainID) != c.chainID {
+		return nil, &OpenAPIError{Message: "Cannot place order on different chain"}
 	}
 
-	// Calculate amounts
-	makerAmountFloat, err := strconv.ParseFloat(getMakerAmount(data), 64)
-	if err != nil {
-		return nil, err
+	// Find matching quote token
+	quoteTokenAddr := market.QuoteToken
+	var matchedQuoteToken *QuoteToken
+	for i := range quoteTokenListResponse.Result.List {
+		qt := &quoteTokenListResponse.Result.List[i]
+		if strings.EqualFold(qt.QuoteTokenAddress, quoteTokenAddr) {
+			matchedQuoteToken = qt
+			break
+		}
+	}
+	if matchedQuoteToken == nil {
+		return nil, &OpenAPIError{Message: "Quote token not found for this market"}
 	}
 
-	// TODO: Get currency decimals from parsed quote token data instead of hardcoded 18
-	currencyDecimal := 18 // Would come from quote token data
-	makerAmountWei, err := SafeAmountToWei(makerAmountFloat, currencyDecimal)
-	if err != nil {
-		return nil, err
+	exchangeAddr := matchedQuoteToken.CTFExchangeAddress
+	currencyDecimal := matchedQuoteToken.Decimal
+
+	// Validate based on order type and side
+	// Reject if market buy and makerAmountInBaseToken is provided
+	if data.Side == OrderSideBuy && data.OrderType == OrderTypeMarket && data.MakerAmountInBaseToken != nil {
+		return nil, &InvalidParamError{Message: "makerAmountInBaseToken is not allowed for market buy"}
+	}
+	// Reject if market sell and makerAmountInQuoteToken is provided
+	if data.Side == OrderSideSell && data.OrderType == OrderTypeMarket && data.MakerAmountInQuoteToken != nil {
+		return nil, &InvalidParamError{Message: "makerAmountInQuoteToken is not allowed for market sell"}
 	}
 
-	var recalculatedMakerAmount, takerAmount *big.Int
-	priceFloat, err := strconv.ParseFloat(data.Price, 64)
-	if err != nil {
-		return nil, err
-	}
-
+	// Validate price for limit orders
 	if data.OrderType == OrderTypeLimit {
+		priceFloat, err := strconv.ParseFloat(data.Price, 64)
+		if err != nil || priceFloat <= 0 {
+			return nil, &InvalidParamError{Message: fmt.Sprintf("Price must be positive for limit orders, got: %s", data.Price)}
+		}
+	}
+
+	// Calculate makerAmount based on side
+	var makerAmount float64
+	const minimalMakerAmount = 1.0
+
+	if data.Side == OrderSideBuy {
+		if data.MakerAmountInBaseToken != nil {
+			// BUY with base token amount: makerAmount = baseAmount * price
+			baseAmount, err := strconv.ParseFloat(*data.MakerAmountInBaseToken, 64)
+			if err != nil {
+				return nil, &InvalidParamError{Message: fmt.Sprintf("invalid makerAmountInBaseToken: %s", *data.MakerAmountInBaseToken)}
+			}
+			if baseAmount < minimalMakerAmount {
+				return nil, &InvalidParamError{Message: "makerAmountInBaseToken must be at least 1"}
+			}
+			priceFloat, _ := strconv.ParseFloat(data.Price, 64)
+			makerAmount = baseAmount * priceFloat
+		} else if data.MakerAmountInQuoteToken != nil {
+			// BUY with quote token amount: use as-is
+			quoteAmount, err := strconv.ParseFloat(*data.MakerAmountInQuoteToken, 64)
+			if err != nil {
+				return nil, &InvalidParamError{Message: fmt.Sprintf("invalid makerAmountInQuoteToken: %s", *data.MakerAmountInQuoteToken)}
+			}
+			if quoteAmount < minimalMakerAmount {
+				return nil, &InvalidParamError{Message: "makerAmountInQuoteToken must be at least 1"}
+			}
+			makerAmount = quoteAmount
+		} else {
+			return nil, &InvalidParamError{Message: "Either makerAmountInBaseToken or makerAmountInQuoteToken must be provided for BUY orders"}
+		}
+	} else { // SELL
+		if data.MakerAmountInBaseToken != nil {
+			// SELL with base token amount: use as-is
+			baseAmount, err := strconv.ParseFloat(*data.MakerAmountInBaseToken, 64)
+			if err != nil {
+				return nil, &InvalidParamError{Message: fmt.Sprintf("invalid makerAmountInBaseToken: %s", *data.MakerAmountInBaseToken)}
+			}
+			if baseAmount < minimalMakerAmount {
+				return nil, &InvalidParamError{Message: "makerAmountInBaseToken must be at least 1"}
+			}
+			makerAmount = baseAmount
+		} else if data.MakerAmountInQuoteToken != nil {
+			// SELL with quote token amount: makerAmount = quoteAmount / price
+			quoteAmount, err := strconv.ParseFloat(*data.MakerAmountInQuoteToken, 64)
+			if err != nil {
+				return nil, &InvalidParamError{Message: fmt.Sprintf("invalid makerAmountInQuoteToken: %s", *data.MakerAmountInQuoteToken)}
+			}
+			if quoteAmount < minimalMakerAmount {
+				return nil, &InvalidParamError{Message: "makerAmountInQuoteToken must be at least 1"}
+			}
+			priceFloat, _ := strconv.ParseFloat(data.Price, 64)
+			if priceFloat == 0 {
+				return nil, &InvalidParamError{Message: "Price cannot be zero for SELL orders with makerAmountInQuoteToken"}
+			}
+			makerAmount = quoteAmount / priceFloat
+		} else {
+			return nil, &InvalidParamError{Message: "Either makerAmountInBaseToken or makerAmountInQuoteToken must be provided for SELL orders"}
+		}
+	}
+
+	// Final validation: ensure makerAmount was properly calculated
+	if makerAmount <= 0 {
+		return nil, &InvalidParamError{Message: fmt.Sprintf("Calculated makerAmount must be positive, got: %f", makerAmount)}
+	}
+
+	// Handle market orders: set price to 0 and takerAmount to 0
+	price := data.Price
+	if data.OrderType == OrderTypeMarket {
+		price = "0"
+	}
+
+	// Convert makerAmount to wei
+	makerAmountWei, err := SafeAmountToWei(makerAmount, currencyDecimal)
+	if err != nil {
+		return nil, &InvalidParamError{Message: fmt.Sprintf("failed to convert makerAmount to wei: %v", err)}
+	}
+
+	// Calculate order amounts for limit orders
+	var recalculatedMakerAmount, takerAmount *big.Int
+	if data.OrderType == OrderTypeLimit {
+		priceFloat, _ := strconv.ParseFloat(price, 64)
 		recalculatedMakerAmount, takerAmount, err = CalculateOrderAmounts(
 			priceFloat,
 			makerAmountWei,
@@ -481,46 +637,45 @@ func (c *Client) PlaceOrder(ctx context.Context, data PlaceOrderDataInput, check
 		Side:          convertOrderSide(data.Side),
 		SignatureType: chain.SignatureTypePolyGnosisSafe,
 		Nonce:         "0",
+		Signer:        c.contractCaller.GetSignerAddress().Hex(),
 		Expiration:    "0",
 	}
 
-	// TODO: Extract exchange address from parsed quote token data
 	// Build and sign order
-	exchangeAddr := "" // Would come from quote token data
-	orderBuilder, err := chain.NewOrderBuilder(exchangeAddr, int64(c.chainID), privateKey)
+	orderBuilder, err := chain.NewOrderBuilder(exchangeAddr, int64(c.chainID), c.contractCaller.GetPrivateKey())
 	if err != nil {
-		return nil, err
+		return nil, &OpenAPIError{Message: fmt.Sprintf("failed to create order builder: %v", err)}
 	}
 
 	signedOrder, err := orderBuilder.BuildSignedOrder(orderData)
 	if err != nil {
-		return nil, err
+		return nil, &OpenAPIError{Message: fmt.Sprintf("failed to build signed order: %v", err)}
 	}
 
 	// Create order request
 	orderReq := map[string]interface{}{
-		"salt":            signedOrder.Order.Salt,
-		"topic_id":        data.MarketID,
-		"maker":           signedOrder.Order.Maker,
-		"signer":          signedOrder.Order.Signer,
-		"taker":           signedOrder.Order.Taker,
-		"token_id":        signedOrder.Order.TokenID,
-		"maker_amount":    signedOrder.Order.MakerAmount,
-		"taker_amount":    signedOrder.Order.TakerAmount,
-		"expiration":      signedOrder.Order.Expiration,
-		"nonce":           signedOrder.Order.Nonce,
-		"fee_rate_bps":    signedOrder.Order.FeeRateBps,
-		"side":            signedOrder.Order.Side,
-		"signature_type":  signedOrder.Order.SignatureType,
-		"signature":       signedOrder.Signature,
-		"sign":            signedOrder.Signature,
+		"salt":             signedOrder.Order.Salt,
+		"topic_id":         data.MarketID,
+		"maker":            signedOrder.Order.Maker,
+		"signer":           signedOrder.Order.Signer,
+		"taker":            signedOrder.Order.Taker,
+		"token_id":         signedOrder.Order.TokenID,
+		"maker_amount":     signedOrder.Order.MakerAmount,
+		"taker_amount":     signedOrder.Order.TakerAmount,
+		"expiration":       signedOrder.Order.Expiration,
+		"nonce":            signedOrder.Order.Nonce,
+		"fee_rate_bps":     signedOrder.Order.FeeRateBps,
+		"side":             signedOrder.Order.Side,
+		"signature_type":   signedOrder.Order.SignatureType,
+		"signature":        signedOrder.Signature,
+		"sign":             signedOrder.Signature,
 		"contract_address": "",
-		"currency_address": "", // TODO: Extract from parsed market data
-		"price":           data.Price,
-		"trading_method":  int(data.OrderType),
-		"timestamp":       time.Now().Unix(),
-		"safe_rate":       "0",
-		"order_exp_time":  "0",
+		"currency_address": quoteTokenAddr,
+		"price":            price,
+		"trading_method":   int(data.OrderType),
+		"timestamp":        time.Now().Unix(),
+		"safe_rate":        "0",
+		"order_exp_time":   "0",
 	}
 
 	return c.apiClient.PlaceOrder(orderReq)
@@ -586,3 +741,198 @@ func (c *Client) GetUserAuth() (interface{}, error) {
 	return c.apiClient.GetUserAuth()
 }
 
+// PlaceOrdersBatch places multiple orders in batch to reduce API calls.
+// If checkApproval is true, trading is enabled once for all orders.
+func (c *Client) PlaceOrdersBatch(ctx context.Context, orders []PlaceOrderDataInput, checkApproval bool) ([]BatchOrderResult, error) {
+	if len(orders) == 0 {
+		return nil, &InvalidParamError{Message: "orders list cannot be empty"}
+	}
+
+	// Enable trading once for all orders if needed
+	if checkApproval {
+		if _, err := c.EnableTrading(ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	results := make([]BatchOrderResult, 0, len(orders))
+
+	for i, order := range orders {
+		orderCopy := order                             // Create a copy for the pointer
+		result, err := c.PlaceOrder(ctx, order, false) // Don't check approval again
+		if err != nil {
+			results = append(results, BatchOrderResult{
+				Index:   i,
+				Success: false,
+				Error:   err.Error(),
+				Order:   &orderCopy,
+			})
+		} else {
+			results = append(results, BatchOrderResult{
+				Index:   i,
+				Success: true,
+				Result:  result,
+				Order:   &orderCopy,
+			})
+		}
+	}
+
+	return results, nil
+}
+
+// CancelOrdersBatch cancels multiple orders in batch.
+func (c *Client) CancelOrdersBatch(orderIDs []string) ([]BatchCancelResult, error) {
+	if len(orderIDs) == 0 {
+		return nil, &InvalidParamError{Message: "orderIDs list cannot be empty"}
+	}
+
+	results := make([]BatchCancelResult, 0, len(orderIDs))
+
+	for i, orderID := range orderIDs {
+		result, err := c.CancelOrder(orderID)
+		if err != nil {
+			results = append(results, BatchCancelResult{
+				Index:   i,
+				Success: false,
+				Error:   err.Error(),
+				OrderID: orderID,
+			})
+		} else {
+			results = append(results, BatchCancelResult{
+				Index:   i,
+				Success: true,
+				Result:  result,
+				OrderID: orderID,
+			})
+		}
+	}
+
+	return results, nil
+}
+
+// CancelAllOrders cancels all open orders, optionally filtered by market and/or side.
+// Uses pagination to fetch all orders (max 20 per page).
+func (c *Client) CancelAllOrders(marketID *int, side *OrderSide) (*CancelAllOrdersResult, error) {
+	const (
+		maxPageLimit = 20
+		maxPages     = 100 // Safety limit to prevent infinite loops
+		openStatus   = "1" // 1 = pending/open orders
+	)
+
+	// Collect all open orders using pagination
+	var allOrderIDs []string
+	page := 1
+
+	for page <= maxPages {
+		// Get orders for current page
+		market := 0
+		if marketID != nil {
+			market = *marketID
+		}
+		pageOrders, err := c.GetMyOrders(market, openStatus, maxPageLimit, page)
+		if err != nil {
+			return nil, &OpenAPIError{Message: fmt.Sprintf("failed to get open orders page %d: %v", page, err)}
+		}
+
+		// Parse response to extract order list
+		orders, ok := parseOrdersList(pageOrders)
+		if !ok || len(orders) == 0 {
+			// No more orders on this page
+			break
+		}
+
+		// Filter by side if specified and extract order IDs
+		for _, order := range orders {
+			if side != nil {
+				orderSide, sideOk := order["side"]
+				if sideOk {
+					// Handle both int and float64 JSON parsing
+					var orderSideInt int
+					switch v := orderSide.(type) {
+					case float64:
+						orderSideInt = int(v)
+					case int:
+						orderSideInt = v
+					default:
+						continue // Skip if side is not a valid type
+					}
+					if orderSideInt != int(*side) {
+						continue // Skip orders that don't match the filter
+					}
+				}
+			}
+
+			if orderID, ok := order["order_id"].(string); ok && orderID != "" {
+				allOrderIDs = append(allOrderIDs, orderID)
+			}
+		}
+
+		// If we got fewer orders than the limit, we've reached the last page
+		if len(orders) < maxPageLimit {
+			break
+		}
+
+		page++
+	}
+
+	if len(allOrderIDs) == 0 {
+		return &CancelAllOrdersResult{
+			TotalOrders: 0,
+			Cancelled:   0,
+			Failed:      0,
+			Results:     []BatchCancelResult{},
+		}, nil
+	}
+
+	// Cancel all orders in batch
+	results, err := c.CancelOrdersBatch(allOrderIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Count successes and failures
+	cancelled := 0
+	failed := 0
+	for _, r := range results {
+		if r.Success {
+			cancelled++
+		} else {
+			failed++
+		}
+	}
+
+	return &CancelAllOrdersResult{
+		TotalOrders: len(allOrderIDs),
+		Cancelled:   cancelled,
+		Failed:      failed,
+		Results:     results,
+	}, nil
+}
+
+// parseOrdersList attempts to parse the orders list from a GetMyOrders response
+func parseOrdersList(response interface{}) ([]map[string]interface{}, bool) {
+	// Try to parse as a map with result.list structure
+	respMap, ok := response.(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+
+	result, ok := respMap["result"].(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+
+	list, ok := result["list"].([]interface{})
+	if !ok {
+		return nil, false
+	}
+
+	orders := make([]map[string]interface{}, 0, len(list))
+	for _, item := range list {
+		if order, ok := item.(map[string]interface{}); ok {
+			orders = append(orders, order)
+		}
+	}
+
+	return orders, true
+}

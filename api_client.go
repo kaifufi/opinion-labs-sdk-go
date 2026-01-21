@@ -58,8 +58,7 @@ func (c *APIClient) doRequest(method, endpoint string, body interface{}) (*http.
 }
 
 // GetQuoteTokens fetches the list of supported quote tokens
-// TODO: Return typed struct instead of interface{} for better type safety
-func (c *APIClient) GetQuoteTokens() (interface{}, error) {
+func (c *APIClient) GetQuoteTokens() (*GetQuoteTokensResponse, error) {
 	endpoint := fmt.Sprintf("/openapi/quote-token?chain_id=%d", c.chainID)
 	resp, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
@@ -67,27 +66,30 @@ func (c *APIClient) GetQuoteTokens() (interface{}, error) {
 	}
 	defer resp.Body.Close()
 
-	var result interface{}
+	var result GetQuoteTokensResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	return result, nil
+	if result.Code != 0 {
+		return nil, fmt.Errorf("API error: %s", result.Msg)
+	}
+
+	return &result, nil
 }
 
 // GetMarkets fetches markets with pagination and filters
-// TODO: Return typed struct instead of interface{} for better type safety
-func (c *APIClient) GetMarkets(topicType TopicType, page, limit int, status *TopicStatusFilter, sortBy *TopicSortType) (interface{}, error) {
+func (c *APIClient) GetMarkets(topicType TopicType, page, limit int, status *TopicStatusFilter, sortBy *TopicSortType) (*GetMarketsResponse, error) {
 	endpoint := fmt.Sprintf("/openapi/market?chain_id=%d&page=%d&limit=%d", c.chainID, page, limit)
-	
+
 	if topicType != TopicTypeAll {
 		endpoint += fmt.Sprintf("&market_type=%d", topicType)
 	}
-	
+
 	if status != nil && *status != TopicStatusFilterAll {
 		endpoint += fmt.Sprintf("&status=%s", *status)
 	}
-	
+
 	if sortBy != nil {
 		endpoint += fmt.Sprintf("&sort_by=%d", *sortBy)
 	}
@@ -98,17 +100,20 @@ func (c *APIClient) GetMarkets(topicType TopicType, page, limit int, status *Top
 	}
 	defer resp.Body.Close()
 
-	var result interface{}
+	var result GetMarketsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	return result, nil
+	if result.Code != 0 {
+		return nil, fmt.Errorf("API error: %s", result.Msg)
+	}
+
+	return &result, nil
 }
 
 // GetMarket fetches detailed information about a specific market
-// TODO: Return typed Market struct instead of interface{} for better type safety
-func (c *APIClient) GetMarket(marketID int) (interface{}, error) {
+func (c *APIClient) GetMarket(marketID int) (*GetMarketResponse, error) {
 	endpoint := fmt.Sprintf("/openapi/market/%d", marketID)
 	resp, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
@@ -116,12 +121,16 @@ func (c *APIClient) GetMarket(marketID int) (interface{}, error) {
 	}
 	defer resp.Body.Close()
 
-	var result interface{}
+	var result GetMarketResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	return result, nil
+	if result.Code != 0 {
+		return nil, fmt.Errorf("API error: %s", result.Msg)
+	}
+
+	return &result, nil
 }
 
 // GetCategoricalMarket fetches detailed information about a categorical market
@@ -350,4 +359,3 @@ func (c *APIClient) GetUserAuth() (interface{}, error) {
 
 	return result, nil
 }
-

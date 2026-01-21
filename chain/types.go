@@ -1,5 +1,11 @@
 package chain
 
+import (
+	"strings"
+
+	"github.com/ethereum/go-ethereum/accounts/abi"
+)
+
 // OrderSide represents the side of an order
 type OrderSide int
 
@@ -61,3 +67,200 @@ type FeeRateSettings struct {
 	Enabled         bool
 }
 
+// ERC20 ABI JSON for allowance, approve, balanceOf, and decimals functions
+const erc20ABIJSON = `[
+	{
+		"constant": true,
+		"inputs": [
+			{"name": "owner", "type": "address"},
+			{"name": "spender", "type": "address"}
+		],
+		"name": "allowance",
+		"outputs": [{"name": "", "type": "uint256"}],
+		"type": "function"
+	},
+	{
+		"constant": false,
+		"inputs": [
+			{"name": "spender", "type": "address"},
+			{"name": "amount", "type": "uint256"}
+		],
+		"name": "approve",
+		"outputs": [{"name": "", "type": "bool"}],
+		"type": "function"
+	},
+	{
+		"constant": true,
+		"inputs": [{"name": "account", "type": "address"}],
+		"name": "balanceOf",
+		"outputs": [{"name": "", "type": "uint256"}],
+		"type": "function"
+	},
+	{
+		"constant": true,
+		"inputs": [],
+		"name": "decimals",
+		"outputs": [{"name": "", "type": "uint8"}],
+		"type": "function"
+	}
+]`
+
+// ConditionalTokens ABI JSON for splitPosition, mergePositions, redeemPositions, isApprovedForAll, setApprovalForAll, and balanceOf
+const conditionalTokensABIJSON = `[
+	{
+		"constant": true,
+		"inputs": [
+			{"name": "owner", "type": "address"},
+			{"name": "operator", "type": "address"}
+		],
+		"name": "isApprovedForAll",
+		"outputs": [{"name": "", "type": "bool"}],
+		"type": "function"
+	},
+	{
+		"constant": false,
+		"inputs": [
+			{"name": "operator", "type": "address"},
+			{"name": "approved", "type": "bool"}
+		],
+		"name": "setApprovalForAll",
+		"outputs": [],
+		"type": "function"
+	},
+	{
+		"constant": false,
+		"inputs": [
+			{"name": "collateralToken", "type": "address"},
+			{"name": "parentCollectionId", "type": "bytes32"},
+			{"name": "conditionId", "type": "bytes32"},
+			{"name": "partition", "type": "uint256[]"},
+			{"name": "amount", "type": "uint256"}
+		],
+		"name": "splitPosition",
+		"outputs": [],
+		"type": "function"
+	},
+	{
+		"constant": false,
+		"inputs": [
+			{"name": "collateralToken", "type": "address"},
+			{"name": "parentCollectionId", "type": "bytes32"},
+			{"name": "conditionId", "type": "bytes32"},
+			{"name": "partition", "type": "uint256[]"},
+			{"name": "amount", "type": "uint256"}
+		],
+		"name": "mergePositions",
+		"outputs": [],
+		"type": "function"
+	},
+	{
+		"constant": false,
+		"inputs": [
+			{"name": "collateralToken", "type": "address"},
+			{"name": "parentCollectionId", "type": "bytes32"},
+			{"name": "conditionId", "type": "bytes32"},
+			{"name": "indexSets", "type": "uint256[]"}
+		],
+		"name": "redeemPositions",
+		"outputs": [],
+		"type": "function"
+	},
+	{
+		"constant": true,
+		"inputs": [
+			{"name": "owner", "type": "address"},
+			{"name": "id", "type": "uint256"}
+		],
+		"name": "balanceOf",
+		"outputs": [{"name": "", "type": "uint256"}],
+		"type": "function"
+	},
+	{
+		"constant": true,
+		"inputs": [
+			{"name": "parentCollectionId", "type": "bytes32"},
+			{"name": "conditionId", "type": "bytes32"},
+			{"name": "indexSet", "type": "uint256"}
+		],
+		"name": "getCollectionId",
+		"outputs": [{"name": "", "type": "bytes32"}],
+		"type": "function"
+	},
+	{
+		"constant": true,
+		"inputs": [
+			{"name": "collateralToken", "type": "address"},
+			{"name": "collectionId", "type": "bytes32"}
+		],
+		"name": "getPositionId",
+		"outputs": [{"name": "", "type": "uint256"}],
+		"type": "function"
+	}
+]`
+
+// Multisend ABI JSON
+const multisendABIJSON = `[
+	{
+		"constant": false,
+		"inputs": [
+			{"name": "transactions", "type": "bytes"}
+		],
+		"name": "multiSend",
+		"outputs": [],
+		"type": "function"
+	}
+]`
+
+// FeeManager ABI JSON for getFeeRateSettings function
+const feeManagerABIJSON = `[
+	{
+		"constant": true,
+		"inputs": [
+			{"name": "tokenId", "type": "uint256"}
+		],
+		"name": "getFeeRateSettings",
+		"outputs": [
+			{"name": "makerFeeRateBps", "type": "uint256"},
+			{"name": "takerFeeRateBps", "type": "uint256"},
+			{"name": "enabled", "type": "bool"},
+			{"name": "minFeeAmount", "type": "uint256"}
+		],
+		"type": "function"
+	}
+]`
+
+// GetERC20ABI returns the parsed ERC20 ABI
+func GetERC20ABI() abi.ABI {
+	parsed, err := abi.JSON(strings.NewReader(erc20ABIJSON))
+	if err != nil {
+		panic("failed to parse ERC20 ABI: " + err.Error())
+	}
+	return parsed
+}
+
+// GetConditionalTokensABI returns the parsed ConditionalTokens ABI
+func GetConditionalTokensABI() abi.ABI {
+	parsed, err := abi.JSON(strings.NewReader(conditionalTokensABIJSON))
+	if err != nil {
+		panic("failed to parse ConditionalTokens ABI: " + err.Error())
+	}
+	return parsed
+}
+
+// GetMultisendABI returns the parsed Multisend ABI
+func GetMultisendABI() abi.ABI {
+	parsed, err := abi.JSON(strings.NewReader(multisendABIJSON))
+	if err != nil {
+		panic("failed to parse Multisend ABI: " + err.Error())
+	}
+	return parsed
+}
+
+// GetFeeManagerABI returns the parsed FeeManager ABI
+func GetFeeManagerABI() abi.ABI {
+	parsed, err := abi.JSON(strings.NewReader(feeManagerABIJSON))
+	if err != nil {
+		panic("failed to parse FeeManager ABI: " + err.Error())
+	}
+	return parsed
+}
