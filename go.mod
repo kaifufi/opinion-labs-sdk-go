@@ -1,4 +1,4 @@
-module github.com/metfin/opinion-clob-sdk-go
+module github.com/kaifufi/opinion-clob-sdk-go
 
 go 1.21
 

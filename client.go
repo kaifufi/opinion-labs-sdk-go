@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/metfin/opinion-clob-sdk-go/chain"
+	"github.com/kaifufi/opinion-clob-sdk-go/chain"
 )
 
 // Client is the main SDK client

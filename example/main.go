@@ -8,7 +8,7 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/metfin/opinion-clob-sdk-go"
+	opinionclob "github.com/kaifufi/opinion-clob-sdk-go"
 )
 
 func main() {
