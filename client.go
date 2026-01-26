@@ -653,6 +653,39 @@ func (c *Client) PlaceOrder(ctx context.Context, data PlaceOrderDataInput, check
 	}
 
 	// Create order request
+	// Note: contract_address should not be empty string - use exchange address if needed
+	contractAddr := exchangeAddr
+	if contractAddr == "" {
+		// If exchange address is not available, don't send empty string
+		// Some APIs might reject empty strings for address fields
+		contractAddr = "0x0000000000000000000000000000000000000000" // Zero address as fallback
+	}
+	
+	// Validate amounts before creating request
+	if signedOrder.Order.MakerAmount == "" {
+		return nil, &InvalidParamError{Message: "maker_amount cannot be empty"}
+	}
+	if signedOrder.Order.TakerAmount == "" {
+		return nil, &InvalidParamError{Message: "taker_amount cannot be empty"}
+	}
+	if signedOrder.Order.FeeRateBps == "" {
+		return nil, &InvalidParamError{Message: "fee_rate_bps cannot be empty"}
+	}
+	if data.OrderType == OrderTypeLimit && (price == "" || price == "0") {
+		return nil, &InvalidParamError{Message: "price cannot be empty or zero for limit orders"}
+	}
+	
+	// Validate that amounts are valid decimal strings
+	if _, err := strconv.ParseFloat(signedOrder.Order.MakerAmount, 64); err != nil {
+		return nil, &InvalidParamError{Message: fmt.Sprintf("invalid maker_amount format: %s", signedOrder.Order.MakerAmount)}
+	}
+	if _, err := strconv.ParseFloat(signedOrder.Order.TakerAmount, 64); err != nil {
+		return nil, &InvalidParamError{Message: fmt.Sprintf("invalid taker_amount format: %s", signedOrder.Order.TakerAmount)}
+	}
+	if _, err := strconv.ParseInt(signedOrder.Order.FeeRateBps, 10, 64); err != nil {
+		return nil, &InvalidParamError{Message: fmt.Sprintf("invalid fee_rate_bps format: %s", signedOrder.Order.FeeRateBps)}
+	}
+	
 	orderReq := map[string]interface{}{
 		"salt":             signedOrder.Order.Salt,
 		"topic_id":         data.MarketID,
@@ -669,13 +702,26 @@ func (c *Client) PlaceOrder(ctx context.Context, data PlaceOrderDataInput, check
 		"signature_type":   signedOrder.Order.SignatureType,
 		"signature":        signedOrder.Signature,
 		"sign":             signedOrder.Signature,
-		"contract_address": "",
+		"contract_address": contractAddr,
 		"currency_address": quoteTokenAddr,
 		"price":            price,
 		"trading_method":   int(data.OrderType),
 		"timestamp":        time.Now().Unix(),
-		"safe_rate":        "0",
-		"order_exp_time":   "0",
+		"safe_rate":        "0",      // Keep as string "0" to match Python SDK
+		"order_exp_time":   "0",      // Keep as string "0" to match Python SDK
+	}
+	
+	// Final validation: ensure no empty strings in numeric fields
+	for key, value := range orderReq {
+		if strVal, ok := value.(string); ok {
+			// Check if this is a numeric field that shouldn't be empty
+			numericFields := []string{"maker_amount", "taker_amount", "fee_rate_bps", "price", "safe_rate", "order_exp_time"}
+			for _, field := range numericFields {
+				if key == field && strVal == "" {
+					return nil, &InvalidParamError{Message: fmt.Sprintf("%s cannot be empty string", key)}
+				}
+			}
+		}
 	}
 
 	return c.apiClient.PlaceOrder(orderReq)

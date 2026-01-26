@@ -57,9 +57,71 @@ func (c *APIClient) doRequest(method, endpoint string, body interface{}) (*http.
 	return resp, nil
 }
 
+// decodeJSONResponse reads the response body, checks HTTP status, and decodes JSON
+func (c *APIClient) decodeJSONResponse(resp *http.Response, result interface{}) error {
+	// Read body first to check status and handle errors
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	// Check HTTP status code before attempting to decode JSON
+	if resp.StatusCode != http.StatusOK {
+		bodyStr := string(bodyBytes)
+		if bodyStr == "" {
+			bodyStr = resp.Status
+		}
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, bodyStr)
+	}
+
+	// Decode JSON
+	if err := json.Unmarshal(bodyBytes, result); err != nil {
+		// If JSON decode fails, include the body in the error for debugging
+		bodyStr := string(bodyBytes)
+		if len(bodyStr) > 200 {
+			bodyStr = bodyStr[:200] + "..."
+		}
+		return fmt.Errorf("failed to decode JSON response: %w (body: %s)", err, bodyStr)
+	}
+
+	return nil
+}
+
+// decodeJSONResponseInterface reads the response body, checks HTTP status, and decodes JSON into interface{}
+func (c *APIClient) decodeJSONResponseInterface(resp *http.Response) (interface{}, error) {
+	// Read body first to check status and handle errors
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	// Check HTTP status code before attempting to decode JSON
+	if resp.StatusCode != http.StatusOK {
+		bodyStr := string(bodyBytes)
+		if bodyStr == "" {
+			bodyStr = resp.Status
+		}
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, bodyStr)
+	}
+
+	// Decode JSON
+	var result interface{}
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
+		// If JSON decode fails, include the body in the error for debugging
+		bodyStr := string(bodyBytes)
+		if len(bodyStr) > 200 {
+			bodyStr = bodyStr[:200] + "..."
+		}
+		return nil, fmt.Errorf("failed to decode JSON response: %w (body: %s)", err, bodyStr)
+	}
+
+	return result, nil
+}
+
 // GetQuoteTokens fetches the list of supported quote tokens
 func (c *APIClient) GetQuoteTokens() (*GetQuoteTokensResponse, error) {
-	endpoint := fmt.Sprintf("/openapi/quote-token?chain_id=%d", c.chainID)
+	// According to OpenAPI spec: /quoteToken with chainId as query parameter
+	endpoint := fmt.Sprintf("/quoteToken?chainId=%d", c.chainID)
 	resp, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -67,8 +129,8 @@ func (c *APIClient) GetQuoteTokens() (*GetQuoteTokensResponse, error) {
 	defer resp.Body.Close()
 
 	var result GetQuoteTokensResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+	if err := c.decodeJSONResponse(resp, &result); err != nil {
+		return nil, err
 	}
 
 	if result.Code != 0 {
@@ -80,7 +142,7 @@ func (c *APIClient) GetQuoteTokens() (*GetQuoteTokensResponse, error) {
 
 // GetMarkets fetches markets with pagination and filters
 func (c *APIClient) GetMarkets(topicType TopicType, page, limit int, status *TopicStatusFilter, sortBy *TopicSortType) (*GetMarketsResponse, error) {
-	endpoint := fmt.Sprintf("/openapi/market?chain_id=%d&page=%d&limit=%d", c.chainID, page, limit)
+	endpoint := fmt.Sprintf("/market?chain_id=%d&page=%d&limit=%d", c.chainID, page, limit)
 
 	if topicType != TopicTypeAll {
 		endpoint += fmt.Sprintf("&market_type=%d", topicType)
@@ -101,8 +163,8 @@ func (c *APIClient) GetMarkets(topicType TopicType, page, limit int, status *Top
 	defer resp.Body.Close()
 
 	var result GetMarketsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+	if err := c.decodeJSONResponse(resp, &result); err != nil {
+		return nil, err
 	}
 
 	if result.Code != 0 {
@@ -114,7 +176,7 @@ func (c *APIClient) GetMarkets(topicType TopicType, page, limit int, status *Top
 
 // GetMarket fetches detailed information about a specific market
 func (c *APIClient) GetMarket(marketID int) (*GetMarketResponse, error) {
-	endpoint := fmt.Sprintf("/openapi/market/%d", marketID)
+	endpoint := fmt.Sprintf("/market/%d", marketID)
 	resp, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -122,8 +184,8 @@ func (c *APIClient) GetMarket(marketID int) (*GetMarketResponse, error) {
 	defer resp.Body.Close()
 
 	var result GetMarketResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+	if err := c.decodeJSONResponse(resp, &result); err != nil {
+		return nil, err
 	}
 
 	if result.Code != 0 {
@@ -135,24 +197,19 @@ func (c *APIClient) GetMarket(marketID int) (*GetMarketResponse, error) {
 
 // GetCategoricalMarket fetches detailed information about a categorical market
 func (c *APIClient) GetCategoricalMarket(marketID int) (interface{}, error) {
-	endpoint := fmt.Sprintf("/openapi/market/categorical/%d", marketID)
+	endpoint := fmt.Sprintf("/market/categorical/%d", marketID)
 	resp, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var result interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return result, nil
+	return c.decodeJSONResponseInterface(resp)
 }
 
 // GetPriceHistory fetches price history/candlestick data for a token
 func (c *APIClient) GetPriceHistory(tokenID string, interval string, startAt, endAt *int64) (interface{}, error) {
-	endpoint := fmt.Sprintf("/openapi/token/price-history?token_id=%s&interval=%s", tokenID, interval)
+	endpoint := fmt.Sprintf("/token/price-history?token_id=%s&interval=%s", tokenID, interval)
 	if startAt != nil {
 		endpoint += fmt.Sprintf("&start_at=%d", *startAt)
 	}
@@ -166,68 +223,64 @@ func (c *APIClient) GetPriceHistory(tokenID string, interval string, startAt, en
 	}
 	defer resp.Body.Close()
 
-	var result interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return result, nil
+	return c.decodeJSONResponseInterface(resp)
 }
 
 // GetOrderbook fetches the orderbook for a specific token
 func (c *APIClient) GetOrderbook(tokenID string) (interface{}, error) {
-	endpoint := fmt.Sprintf("/openapi/token/orderbook?token_id=%s", tokenID)
+	endpoint := fmt.Sprintf("/token/orderbook?token_id=%s", tokenID)
 	resp, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var result interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return result, nil
+	return c.decodeJSONResponseInterface(resp)
 }
 
 // GetLatestPrice fetches the latest price for a token
 func (c *APIClient) GetLatestPrice(tokenID string) (interface{}, error) {
-	endpoint := fmt.Sprintf("/openapi/token/latest-price?token_id=%s", tokenID)
+	endpoint := fmt.Sprintf("/token/latest-price?token_id=%s", tokenID)
 	resp, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var result interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return result, nil
+	return c.decodeJSONResponseInterface(resp)
 }
 
 // PlaceOrder places an order on the market
 func (c *APIClient) PlaceOrder(orderReq interface{}) (interface{}, error) {
-	endpoint := "/openapi/order"
+	endpoint := "/order"
+	
+	// Log the request for debugging (remove sensitive fields in production)
+	if reqMap, ok := orderReq.(map[string]interface{}); ok {
+		// Create a copy for logging (remove signature)
+		logReq := make(map[string]interface{})
+		for k, v := range reqMap {
+			if k == "signature" || k == "sign" {
+				logReq[k] = "[REDACTED]"
+			} else {
+				logReq[k] = v
+			}
+		}
+		// This will help debug what's being sent
+		_ = logReq
+	}
+	
 	resp, err := c.doRequest("POST", endpoint, orderReq)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var result interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return result, nil
+	return c.decodeJSONResponseInterface(resp)
 }
 
 // CancelOrder cancels an existing order
 func (c *APIClient) CancelOrder(orderID string) (interface{}, error) {
-	endpoint := "/openapi/order/cancel"
+	endpoint := "/order/cancel"
 	reqBody := map[string]string{"order_id": orderID}
 	resp, err := c.doRequest("POST", endpoint, reqBody)
 	if err != nil {
@@ -235,17 +288,12 @@ func (c *APIClient) CancelOrder(orderID string) (interface{}, error) {
 	}
 	defer resp.Body.Close()
 
-	var result interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return result, nil
+	return c.decodeJSONResponseInterface(resp)
 }
 
 // GetMyOrders fetches user's orders with optional filters
 func (c *APIClient) GetMyOrders(marketID int, status string, limit, page int) (interface{}, error) {
-	endpoint := fmt.Sprintf("/openapi/order?chain_id=%d&limit=%d&page=%d", c.chainID, limit, page)
+	endpoint := fmt.Sprintf("/order?chain_id=%d&limit=%d&page=%d", c.chainID, limit, page)
 	if marketID > 0 {
 		endpoint += fmt.Sprintf("&market_id=%d", marketID)
 	}
@@ -259,34 +307,24 @@ func (c *APIClient) GetMyOrders(marketID int, status string, limit, page int) (i
 	}
 	defer resp.Body.Close()
 
-	var result interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return result, nil
+	return c.decodeJSONResponseInterface(resp)
 }
 
 // GetOrderByID fetches detailed information about a specific order
 func (c *APIClient) GetOrderByID(orderID string) (interface{}, error) {
-	endpoint := fmt.Sprintf("/openapi/order/%s", orderID)
+	endpoint := fmt.Sprintf("/order/%s", orderID)
 	resp, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var result interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return result, nil
+	return c.decodeJSONResponseInterface(resp)
 }
 
 // GetMyPositions fetches user's positions with optional filters
 func (c *APIClient) GetMyPositions(marketID int, page, limit int) (interface{}, error) {
-	endpoint := fmt.Sprintf("/openapi/positions?chain_id=%d&page=%d&limit=%d", c.chainID, page, limit)
+	endpoint := fmt.Sprintf("/positions?chain_id=%d&page=%d&limit=%d", c.chainID, page, limit)
 	if marketID > 0 {
 		endpoint += fmt.Sprintf("&market_id=%d", marketID)
 	}
@@ -297,34 +335,24 @@ func (c *APIClient) GetMyPositions(marketID int, page, limit int) (interface{}, 
 	}
 	defer resp.Body.Close()
 
-	var result interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return result, nil
+	return c.decodeJSONResponseInterface(resp)
 }
 
 // GetMyBalances fetches user's balances
 func (c *APIClient) GetMyBalances() (interface{}, error) {
-	endpoint := fmt.Sprintf("/openapi/user/balance?chain_id=%d", c.chainID)
+	endpoint := fmt.Sprintf("/user/balance?chain_id=%d", c.chainID)
 	resp, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var result interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return result, nil
+	return c.decodeJSONResponseInterface(resp)
 }
 
 // GetMyTrades fetches user's trade history
 func (c *APIClient) GetMyTrades(marketID *int, page, limit int) (interface{}, error) {
-	endpoint := fmt.Sprintf("/openapi/trade?chain_id=%d&page=%d&limit=%d", c.chainID, page, limit)
+	endpoint := fmt.Sprintf("/trade?chain_id=%d&page=%d&limit=%d", c.chainID, page, limit)
 	if marketID != nil {
 		endpoint += fmt.Sprintf("&market_id=%d", *marketID)
 	}
@@ -335,17 +363,12 @@ func (c *APIClient) GetMyTrades(marketID *int, page, limit int) (interface{}, er
 	}
 	defer resp.Body.Close()
 
-	var result interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return result, nil
+	return c.decodeJSONResponseInterface(resp)
 }
 
 // GetUserAuth fetches authenticated user information
 func (c *APIClient) GetUserAuth() (interface{}, error) {
-	endpoint := "/openapi/user/auth"
+	endpoint := "/user/auth"
 	resp, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
 		return nil, err
