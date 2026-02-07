@@ -8,24 +8,24 @@ import (
 	"math/big"
 	"time"
 
-	opinionclob "github.com/kaifufi/opinion-clob-sdk-go"
+	opinionclob "github.com/kaifufi/opinion-labs-sdk-go"
 )
 
 func main() {
 	// Initialize the SDK client
 	config := opinionclob.ClientConfig{
-		Host:                      "https://api.opinionlabs.com", // Replace with actual API host
-		APIKey:                    "your-api-key-here",
-		ChainID:                   opinionclob.ChainIDBNBMainnet,
-		RPCURL:                    "https://bsc-dataseed1.binance.org", // Replace with actual RPC URL
-		PrivateKey:                "your-private-key-here",           // Replace with actual private key
-		MultiSigAddr:              "your-multisig-address-here",
-		ConditionalTokensAddr:     "", // Will use default
-		MultisendAddr:             "", // Will use default
-		FeeManagerAddr:            "", // Will use default
+		Host:                       "https://api.opinionlabs.com", // Replace with actual API host
+		APIKey:                     "your-api-key-here",
+		ChainID:                    opinionclob.ChainIDBNBMainnet,
+		RPCURL:                     "https://bsc-dataseed1.binance.org", // Replace with actual RPC URL
+		PrivateKey:                 "your-private-key-here",             // Replace with actual private key
+		MultiSigAddr:               "your-multisig-address-here",
+		ConditionalTokensAddr:      "", // Will use default
+		MultisendAddr:              "", // Will use default
+		FeeManagerAddr:             "", // Will use default
 		EnableTradingCheckInterval: 1 * time.Hour,
-		QuoteTokensCacheTTL:       1 * time.Hour,
-		MarketCacheTTL:           5 * time.Minute,
+		QuoteTokensCacheTTL:        1 * time.Hour,
+		MarketCacheTTL:             5 * time.Minute,
 	}
 
 	client, err := opinionclob.NewClient(config)
@@ -82,12 +82,12 @@ func main() {
 	// Example: Place an order
 	fmt.Println("\nPlacing order...")
 	orderData := opinionclob.PlaceOrderDataInput{
-		MarketID:              marketID,
-		TokenID:               "1", // Replace with actual token ID
+		MarketID:                marketID,
+		TokenID:                 "1",              // Replace with actual token ID
 		MakerAmountInQuoteToken: stringPtr("100"), // 100 USDC
-		Price:                 "0.5",
-		Side:                  opinionclob.OrderSideBuy,
-		OrderType:             opinionclob.OrderTypeLimit,
+		Price:                   "0.5",
+		Side:                    opinionclob.OrderSideBuy,
+		OrderType:               opinionclob.OrderTypeLimit,
 	}
 
 	orderResult, err := client.PlaceOrder(ctx, orderData, true)
@@ -138,4 +138,3 @@ func main() {
 func stringPtr(s string) *string {
 	return &s
 }
-

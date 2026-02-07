@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/kaifufi/opinion-clob-sdk-go/chain"
+	"github.com/kaifufi/opinion-labs-sdk-go/chain"
 )
 
 // Client is the main SDK client
@@ -660,7 +660,7 @@ func (c *Client) PlaceOrder(ctx context.Context, data PlaceOrderDataInput, check
 		// Some APIs might reject empty strings for address fields
 		contractAddr = "0x0000000000000000000000000000000000000000" // Zero address as fallback
 	}
-	
+
 	// Validate amounts before creating request
 	if signedOrder.Order.MakerAmount == "" {
 		return nil, &InvalidParamError{Message: "maker_amount cannot be empty"}
@@ -674,7 +674,7 @@ func (c *Client) PlaceOrder(ctx context.Context, data PlaceOrderDataInput, check
 	if data.OrderType == OrderTypeLimit && (price == "" || price == "0") {
 		return nil, &InvalidParamError{Message: "price cannot be empty or zero for limit orders"}
 	}
-	
+
 	// Validate that amounts are valid decimal strings
 	if _, err := strconv.ParseFloat(signedOrder.Order.MakerAmount, 64); err != nil {
 		return nil, &InvalidParamError{Message: fmt.Sprintf("invalid maker_amount format: %s", signedOrder.Order.MakerAmount)}
@@ -685,7 +685,7 @@ func (c *Client) PlaceOrder(ctx context.Context, data PlaceOrderDataInput, check
 	if _, err := strconv.ParseInt(signedOrder.Order.FeeRateBps, 10, 64); err != nil {
 		return nil, &InvalidParamError{Message: fmt.Sprintf("invalid fee_rate_bps format: %s", signedOrder.Order.FeeRateBps)}
 	}
-	
+
 	orderReq := map[string]interface{}{
 		"salt":             signedOrder.Order.Salt,
 		"topic_id":         data.MarketID,
@@ -707,10 +707,10 @@ func (c *Client) PlaceOrder(ctx context.Context, data PlaceOrderDataInput, check
 		"price":            price,
 		"trading_method":   int(data.OrderType),
 		"timestamp":        time.Now().Unix(),
-		"safe_rate":        "0",      // Keep as string "0" to match Python SDK
-		"order_exp_time":   "0",      // Keep as string "0" to match Python SDK
+		"safe_rate":        "0", // Keep as string "0" to match Python SDK
+		"order_exp_time":   "0", // Keep as string "0" to match Python SDK
 	}
-	
+
 	// Final validation: ensure no empty strings in numeric fields
 	for key, value := range orderReq {
 		if strVal, ok := value.(string); ok {

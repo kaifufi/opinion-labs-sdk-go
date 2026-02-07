@@ -1,12 +1,12 @@
 # Opinion CLOB SDK - Go
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/kaifufi/opinion-clob-sdk-go.svg)](https://pkg.go.dev/github.com/kaifufi/opinion-clob-sdk-go)
+[![Go Reference](https://pkg.go.dev/badge/github.com/kaifufi/opinion-labs-sdk-go.svg)](https://pkg.go.dev/github.com/kaifufi/opinion-labs-sdk-go)
 Go SDK for Opinion Prediction Market CLOB API
 
 ## Installation
 
 ```bash
-go get github.com/kaifufi/opinion-clob-sdk-go
+go get github.com/kaifufi/opinion-labs-sdk-go
 ```
 
 ## Requirements
@@ -22,7 +22,7 @@ import (
     "context"
     "time"
 
-    "github.com/kaifufi/opinion-clob-sdk-go"
+    "github.com/kaifufi/opinion-labs-sdk-go"
 )
 
 func main() {
@@ -164,7 +164,7 @@ markets = client.get_markets()
 **Go:**
 
 ```go
-import "github.com/kaifufi/opinion-clob-sdk-go"
+import "github.com/kaifufi/opinion-labs-sdk-go"
 
 config := opinionclob.ClientConfig{
     Host: "https://api.opinionlabs.com",
